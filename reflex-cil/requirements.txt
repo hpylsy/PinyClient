@@ -1,0 +1,4 @@
+reflex>=0.6.0
+paho-mqtt>=2.1.0
+protobuf>=5.29.0
+websockets>=12.0
