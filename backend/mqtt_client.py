@@ -1,7 +1,7 @@
 """
 RoboMaster MQTT 客户端模块
-负责与裁判系统服务器建立 MQTT 连接，接收并解析下行数据。
-状态机逻辑已分离到 states.py，保持解耦。
+负责与裁判系统服务器建立 MQTT 连接, 接收并解析下行数据。
+状态机逻辑已分离到 states.py, 保持解耦。
 """
 from __future__ import annotations
 
@@ -16,18 +16,21 @@ from typing import Callable, Dict, Any
 import paho.mqtt.client as mqtt
 from google.protobuf.json_format import MessageToDict
 
-from states import RMClientStates, RED, BLUE, ALLY, ALL_STATES, CLIENT_ID_TO_NAME
-from protobuf_models import DOWN_TOPIC2MODEL_MAP, UPLINK_TOPIC2MODEL_MAP
+from states import (
+    RMClientStates, RED, BLUE, ALLY, ALL_STATES,
+    CLIENT_ID_TO_NAME, NAME_TO_ID, NAME_TO_CLIENT_ID
+)
+from backend.protobuf_models import DOWN_TOPIC2MODEL_MAP, UPLINK_TOPIC2MODEL_MAP
 
 
 # ============================================================
 # 彩色日志配置 (增强版)
 # ============================================================
 class ColorLogger:
-    """彩色日志生成器，支持分组配色方案"""
+    """彩色日志生成器, 支持分组配色方案"""
 
     # 基础色
-    C = {
+    C: dict[str, str]= {
         "RESET":   "\033[0m",
         "BOLD":    "\033[1m",
         "DIM":     "\033[2m",
@@ -63,7 +66,7 @@ class ColorLogger:
     }
 
     # 分组配色方案
-    THEMES = {
+    THEMES: dict[str, dict[str, str]]= {
         # DEBUG 组：柔和灰蓝
         "DEBUG": {
             "time":  f"{C['GRAY']}{C['DIM']}",
@@ -160,22 +163,12 @@ logger = ColorLogger("pioneer")
 
 
 # ============================================================
-# 常量
+# 常量 (已迁移到 states.py, 此处保留向下兼容)
 # ============================================================
-NAME_TO_ID: Dict[str, Any] = {
-    "RED_HERO": 1, "RED_ENGINEER": 2,
-    "RED_INFANTRY": (3, 4, 5), "RED_AIR": 6,
-    "RED_SENTRY": 7, "RED_DART": 8,
-    "RED_RADAR": 9, "RED_OUTPOST": 10, "RED_BASE": 11,
-    "BLUE_HERO": 101, "BLUE_ENGINEER": 102,
-    "BLUE_INFANTRY": (103, 104, 105), "BLUE_AIR": 106,
-    "BLUE_SENTRY": 107, "BLUE_DART": 108,
-    "BLUE_RADAR": 109, "BLUE_OUTPOST": 110, "BLUE_BASE": 111,
-}
+# NAME_TO_ID, CLIENT_ID_TO_NAME, NAME_TO_CLIENT_ID, ID_TO_NAME
+# 请使用: from states import NAME_TO_ID, CLIENT_ID_TO_NAME, NAME_TO_CLIENT_ID, ID_TO_NAME
 
-ALLOWED_CLIENT_ID: list[int] = []
-for _ids in NAME_TO_ID.values():
-    ALLOWED_CLIENT_ID.extend(_ids) if isinstance(_ids, tuple) else ALLOWED_CLIENT_ID.append(_ids)
+ALLOWED_CLIENT_ID: list[int] = list(CLIENT_ID_TO_NAME.keys())
 
 DOWNLINK_TOPICS = {
     "GameStatus", "GlobalUnitStatus", "GlobalLogisticsStatus",
@@ -202,7 +195,7 @@ UPLINK_TOPICS = {
 # ============================================================
 class RoboMasterMQTT:
     """
-    MQTT 客户端，连接裁判系统服务器，接收比赛数据并更新状态机。
+    MQTT 客户端, 连接裁判系统服务器, 接收比赛数据并更新状态机。
     """
 
     # 每个 topic 对应状态机中哪些字段需要更新
@@ -213,16 +206,19 @@ class RoboMasterMQTT:
     }
 
     def __init__(self, client_id: int, host: str = "192.168.12.1", port: int = 3333):
-        if client_id not in ALLOWED_CLIENT_ID:
-            logger.critical("无效的 client_id: %s，允许值: %s", client_id, ALLOWED_CLIENT_ID)
+        if client_id not in CLIENT_ID_TO_NAME:
+            logger.critical("无效的 client_id: %s, 允许值: %s", client_id, list(CLIENT_ID_TO_NAME.keys()))
             raise ValueError(f"Invalid client_id: {client_id}")
 
         self.client_id = client_id
         self.host = host
         self.port = port
 
-        # 状态机（独立类，可单独提取给 HTTP 模块使用）
-        ally_color = RED if client_id < 100 else BLUE
+        # 通过 CLIENT_ID 判断阵营颜色 (0x01xx = 红方, 0x0165~ = 蓝方)
+        robot_name = CLIENT_ID_TO_NAME.get(client_id, "")
+        ally_color = RED if robot_name.startswith("RED") else BLUE
+        
+        # 状态机（独立类, 可单独提取给 HTTP 模块使用）
         self.states = RMClientStates(ally_color=ally_color)
 
         # MQTT 客户端
@@ -231,7 +227,7 @@ class RoboMasterMQTT:
         self._mqtt.on_message   = self._on_message
         self._mqtt.on_disconnect = self._on_disconnect
 
-        # 消息队列（有界，满了丢弃最旧消息）
+        # 消息队列（有界, 满了丢弃最旧消息）
         self._queue: queue.Queue[tuple[str, bytes]] = queue.Queue(maxsize=500)
 
         # 回调表
@@ -241,8 +237,8 @@ class RoboMasterMQTT:
         self._publish_lock = threading.Lock()
 
         logger.info(
-            "MQTT[%s] 初始化完成，连接目标 %s:%s",
-            CLIENT_ID_TO_NAME.get(client_id, client_id), host, port
+            "MQTT[%s: %s] 初始化完成, 连接目标 %s:%s",
+            CLIENT_ID_TO_NAME.get(client_id, client_id), hex(client_id), host, port
         )
 
     # --------------------------------------------------------
@@ -274,26 +270,32 @@ class RoboMasterMQTT:
                 return
             except Exception as e:
                 attempt += 1
-                logger.warning("第 %d 次连接失败: %s，%.1fs 后重试...", attempt, e, delay)
+                logger.warning("第 %d 次连接失败: %s, %.1fs 后重试...", attempt, e, delay)
                 time.sleep(delay)
                 delay = min(delay * 1.5 + random.uniform(0, 0.5), max_delay)
 
     def _on_connect(self, _client, _userdata, flags, rc: int) -> None:
         if rc == 0:
-            logger.info("连接成功，已订阅 %d 个 topic", len(DOWNLINK_TOPICS))
+            logger.info("连接成功, 已订阅 %d 个 topic", len(DOWNLINK_TOPICS))
             for topic in DOWNLINK_TOPICS:
                 self._mqtt.subscribe(topic)
         else:
-            logger.error("连接失败，rc=%d", rc)
+            logger.error("连接失败, rc=%d", rc)
 
     def _on_message(self, _client, _userdata, msg) -> None:
         try:
             self._queue.put_nowait((msg.topic, msg.payload))
         except queue.Full:
-            logger.warning("消息队列已满，丢弃 topic=%s", msg.topic)
+            # 丢弃队列最旧消息，为新消息腾出空间
+            try:
+                self._queue.get_nowait()
+                self._queue.put_nowait((msg.topic, msg.payload))
+                logger.warning("消息队列已满，丢弃最旧消息，topic=%s", msg.topic)
+            except queue.Empty:
+                logger.warning("消息队列已满，丢弃当前消息，topic=%s", msg.topic)
 
     def _on_disconnect(self, _client, _userdata, rc: int) -> None:
-        logger.warning("连接断开 (rc=%d)，正在重连...", rc)
+        logger.warning("连接断开 (rc=%d), 正在重连...", rc)
         self._connect_loop()
 
     # --------------------------------------------------------
@@ -318,7 +320,7 @@ class RoboMasterMQTT:
             """解析 Protobuf 消息并更新状态机。"""
             model_cls = DOWN_TOPIC2MODEL_MAP.get(topic)
             if model_cls is None:
-                logger.warning("未找到 topic '%s' 的 Protobuf 模型，跳过", topic)
+                logger.warning("未找到 topic '%s' 的 Protobuf 模型, 跳过", topic)
                 return
 
             msg = model_cls()
@@ -354,7 +356,7 @@ class RoboMasterMQTT:
     # 状态查询（委托给状态机）
     # --------------------------------------------------------
     def state_update(self, state, msgs: Any = None) -> None:
-        """兼容旧 API，内部转发给状态机。"""
+        """兼容旧 API, 内部转发给状态机。"""
         if state == ALL_STATES and msgs is not None:
             # 尝试推断 topic 名称
             topic = type(msgs).__name__
@@ -369,7 +371,7 @@ class RoboMasterMQTT:
         with self._publish_lock:
             result = self._mqtt.publish(topic, message)
             if result.rc != mqtt.MQTT_ERR_SUCCESS:
-                logger.error("发布 %s 失败，rc=%d", topic, result.rc)
+                logger.error("发布 %s 失败, rc=%d", topic, result.rc)
             else:
                 logger.debug("已发布 %s", topic)
 
@@ -386,5 +388,6 @@ class RoboMasterMQTT:
 # 入口
 # ============================================================
 if __name__ == "__main__":
-    r = RoboMasterMQTT(client_id=NAME_TO_ID["RED_HERO"], host="localhost", port=3333)
+    # 使用十六进制 CLIENT_ID (0x0101 = 红方英雄)
+    r = RoboMasterMQTT(client_id=NAME_TO_CLIENT_ID["RED_HERO"], host="localhost", port=3333)
     r.start()
