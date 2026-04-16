@@ -37,7 +37,7 @@ class Config:
     BASE_DIR: Path = Path(__file__).parent
     LOG_DIR: Path = BASE_DIR / "tools" / "logs_content"
     LOG_DIR.mkdir(exist_ok=True)
-    RECORD_LOG: bool = True
+    RECORD_LOG: bool = False
     LEVEL = "INFO"  # 可选: DEBUG, INFO, WARNING, ERROR, CRITICAL
 
     @property

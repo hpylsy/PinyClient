@@ -1,4 +1,0 @@
-15:42:47 | INFO     | test | rm_logger.py:158 | test
-15:42:47 | WARNING  | test | rm_logger.py:161 | test
-15:42:47 | ERROR    | test | rm_logger.py:164 | test
-15:42:47 | CRITICAL | test | rm_logger.py:167 | test
