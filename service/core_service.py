@@ -25,7 +25,7 @@ class CoreService:
         self.core_mqtt = RMMQTTClient(cli_id=str(self.player_type.get_cli_id()), host=host, port=port_mqtt, subscribe_topics=subscribe_topics, handler=TOPIC2MSG, callback=self.update_state, description="core client")
         # 图传数据源配置
         self.normal_source = NormalImgSource(host=host, port=port_udp)
-        self.mqtt_source = MqttImgSource(mqtt=self.core_mqtt, host=host, port=port_mqtt)  # 将MQTT客户端实例传入图传数据源，使其能够直接从MQTT消息中获取图像数据
+        self.mqtt_source = MqttImgSource(mqtt=self.core_mqtt)  # 将MQTT客户端实例传入图传数据源，使其能够直接从MQTT消息中获取图像数据
         self._stop_event = threading.Event()
         self._mode_monitor_thread: threading.Thread | None = None
         self.is_hero_old = False

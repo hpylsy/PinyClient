@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>doorlock_stream_e2e</name>
+  <version>0.1.0</version>
+  <description>Standalone GStreamer sender/receiver tools without ROS2 runtime dependency.</description>
+  <maintainer email="dev@example.com">developer</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>libopencv-dev</depend>
+  <depend>libgstreamer1.0-dev</depend>
+  <depend>libgstreamer-plugins-base1.0-dev</depend>
+  <depend>libpaho-mqtt-dev</depend>
+  <depend>libpaho-mqttpp-dev</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -2,5 +2,6 @@ oth-old_structures/
 __pycache__/
 *.pyc
 fix.md
-.vscode/
+.vscode
 test_videos/
+problem.md

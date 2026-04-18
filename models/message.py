@@ -1,17 +1,13 @@
-﻿from typing import Any, cast
-
+﻿import struct
+from typing import Any, cast
 from enum import IntEnum
 from dataclasses import dataclass, field
 
-try:
-    from .base import BaseMessage
-    from .protocol import messages_pb2 as pb_mes
-except ImportError:
-    # 兼容直接运行models目录下的文件进行测试的情况
-    from base import BaseMessage
-    from protocol import messages_pb2 as pb_mes
-_pb = cast(Any, pb_mes)  # 避免pyright对protobuf模块的类型检查错误
+from .base import BaseMessage
+from .protocol import messages_pb2 as pb_mes
 
+_pb = cast(Any, pb_mes)  # 避免pyright对protobuf模块的类型检查错误
+FRAME_PACK_FORMAT = '>HHI' # 帧编号（2 byte）当前帧内分片序号（2 byte）当前帧总字节数（4 byte）
 
 # =============================================
 # 枚举类型（统一集中）
@@ -672,6 +668,29 @@ class AirSupportStatusSync(BaseMessage):
     PB_CLASS = _pb.AirSupportStatusSync
 
 # =============================================
+# 自定义类
+# =============================================
+
+class MqttUdpPackage(CustomByteBlock):
+    def parse(self):
+        """解析UDP数据包并返回状态"""
+        if len(self.data) != 300:
+            raise ValueError("数据包长度!=300字节，数据包不完整")
+        actual_len = int.from_bytes(self.data[0:2], byteorder='little') 
+        payload = self.data[2:2+actual_len]
+        return (actual_len, payload)
+
+class NormalUDPPackage:
+    def __init__(self, data: bytes):
+        self.data = data
+    
+    def parse(self) -> tuple[int, int, int, bytes]:
+        """解析UDP数据包并返回状态"""
+        # 帧编号（2 byte）当前帧内分片序号（2 byte）当前帧总字节数（4 byte）
+        frame_id, chunk_id, total_length = struct.unpack(FRAME_PACK_FORMAT, self.data[:8])
+        return (frame_id, chunk_id, total_length, self.data[8:])
+
+# =============================================
 # 主题名到消息类的映射（统一集中）
 # =============================================
 
@@ -719,8 +738,9 @@ TOPIC2MSG: dict[str, type[BaseMessage]] = {
     # 图传链路类
     "KeyboardMouseControl": KeyboardMouseControl,
     "CustomControl": CustomControl,
-    "CustomByteBlock": CustomByteBlock,
+    "CustomByteBlock": MqttUdpPackage,
 }
+
 
 def get_message_class(topic: str) -> type[BaseMessage]:
     """根据主题名获取对应的消息类。"""

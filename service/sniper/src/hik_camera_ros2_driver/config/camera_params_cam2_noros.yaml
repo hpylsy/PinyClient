@@ -1,0 +1,21 @@
+/**:
+  ros__parameters:
+    camera_info_url: "package://hik_camera_ros2_driver/config/camera_info.yaml"
+    pixel_format: "BayerRG8"
+    use_sensor_data_qos: true
+
+    camera_name: "cam2"
+    frame_id: "cam2_optical_frame"
+    camera_topic: "/cam2/image_raw"
+    camera_serial: "DA2166373"
+
+    acquisition_frame_rate: 120.0
+    exposure_time: 14000
+    gain: 16.0
+
+    # cam2 is non-ROS2 local output in this template
+    enable_ros_publish: false
+
+    enable_shm_output: true
+    shm_name: "/cam2_rgb"
+    shm_max_bytes: 0
