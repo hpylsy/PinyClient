@@ -111,3 +111,16 @@ python app.py
 2. 调试建议
 - 使用 `PIONEER_LOG_LEVEL=DEBUG` 提高日志粒度。
 - 在交互模式下优先通过 `service.state_manager` 与 `service.stop()` 验证状态和生命周期。
+
+## 7. 使用方法
+1. 安装requirements.txt(不保证完全对，若有疏漏请反馈)(注意，不能用conda)
+2. 安装gi(不能用conda的原因在这里)
+    ``` bash
+    sudo apt update
+    sudo apt install python3-gi
+    ```
+3. 启动(在根目录): `python app.py` 或 `python3 app.py`
+4. 启动`mock gateway`（注意，这里监听的MQTT 端口为3333）(cd service/sniper & source install/setup.zsh): `./install/doorlock_stream_e2e/bin/mock_gateway`
+5. 启动`gst_e2e_sender`: `./install/doorlock_stream_e2e/bin/gst_e2e_sender --mode file --file video.mp4 --host 127.0.0.1 --port 12345 --fps 30 --bitrate 300 --enable-display true`
+6. 启动SharkDataServer（或其他MQTT Broker）
+7. 启动`test_udp_sender`: `cd service`, `python test_udp_sender.py` 
