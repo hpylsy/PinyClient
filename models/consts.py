@@ -76,7 +76,28 @@ class PlayerTypes:
             return res[self.Infantry_Select - 1]  # 根据选择返回对应的 client_id
         else:
             return res
-
+    
+    def get_id(self) -> int | tuple[int, ...]:
+        """根据玩家类型获取对应的数字 ID。"""
+        # TODO: 可以和上面的 get_cli_id 方法合并，统一为一个根据名称获取属性的方法，减少重复代码。
+        if self.Side == Sides.UNKNOWN or self.Robot == RobotTypes.UNKNOWN:
+            raise ValueError(f"无法获取数字 ID，因为玩家类型不完整: {self}")
+        
+        # 构建机器人名称
+        color_prefix = self.Side.name
+        robot_suffix = self.Robot.name
+        robot_name: str = f"{color_prefix}_{robot_suffix}"
+        
+        # 获取数字 ID
+        res = get_id_by_name(robot_name)
+        if isinstance(res, tuple):
+            if self.Robot != RobotTypes.INFANTRY:
+                raise ValueError(f"机器人 {robot_name} 对应多个数字 ID，但玩家类型中 Robot 不是 INFANTRY: {self}")
+            if self.Infantry_Select not in (1, 2, 3):
+                raise ValueError(f"玩家类型中 Infantry_Select 必须是 1、2 或 3，但得到的是 {self.Infantry_Select}: {self}")
+            return res[self.Infantry_Select - 1]  # 根据选择返回对应的数字 ID
+        else:
+            return res
 
 RED_HERO = "RED_HERO"
 RED_ENGINEER = "RED_ENGINEER"
@@ -104,35 +125,43 @@ REFREE_SERVER = "REFREE_SERVER"
 # ============================================================
 # ID_TO_NAME: 机器人数字 ID (1, 2, 3...) -> 名称 (RED_HERO, RED_ENGINEER...)
 # 用于裁判系统下发消息中的 robot_id 字段
-ID_TO_NAME: dict[int, str] = {
-    # 红方
-    1: RED_HERO,
-    2: RED_ENGINEER,
-    3: RED_INFANTRY,
-    4: RED_INFANTRY,
-    5: RED_INFANTRY,
-    6: RED_AIR,
-    7: RED_SENTRY,
-    8: RED_DART,
-    9: RED_RADAR,
-    10: RED_OUTPOST,
-    11: RED_BASE,
-    # 蓝方
-    101: BLUE_HERO,
-    102: BLUE_ENGINEER,
-    103: BLUE_INFANTRY,
-    104: BLUE_INFANTRY,
-    105: BLUE_INFANTRY,
-    106: BLUE_AIR,
-    107: BLUE_SENTRY,
-    108: BLUE_DART,
-    109: BLUE_RADAR,
-    110: BLUE_OUTPOST,
-    111: BLUE_BASE,
+
+def reverse(d: dict[str, int | tuple[int, ...]]) -> dict[int, str]:
+    """将名称 -> ID 的映射反转为 ID -> 名称 的映射，支持 ID 是单个整数或整数元组的情况。"""
+    reversed_dict: dict[int, str] = {}
+    for name, ids in d.items():
+        if isinstance(ids, tuple):
+            for id_ in ids:
+                reversed_dict[id_] = name
+        else:
+            reversed_dict[ids] = name
+    return reversed_dict
+
+NAME_TO_ID: dict[str, int | tuple[int, ...]] = {
+    RED_HERO: 1,
+    RED_ENGINEER: 2,
+    RED_INFANTRY: (3, 4, 5),
+    RED_AIR: 6,
+    RED_SENTRY: 7,
+    RED_DART: 8,
+    RED_RADAR: 9,
+    RED_OUTPOST: 10,
+    RED_BASE: 11,
+
+    BLUE_HERO: 101,
+    BLUE_ENGINEER: 102,
+    BLUE_INFANTRY: (103, 104, 105),
+    BLUE_AIR: 106,
+    BLUE_SENTRY: 107,
+    BLUE_DART: 108,
+    BLUE_RADAR: 109,
+    BLUE_OUTPOST: 110,
+    BLUE_BASE: 111,
+    # REFREE_SERVER: 107,
 }
 
 # NAME_TO_ID: 名称 -> 数字 ID 的反向映射
-NAME_TO_ID: dict[str, int | tuple[int, ...]] = {v: k for k, v in ID_TO_NAME.items()}
+ID_TO_NAME: dict[str, int | tuple[int, ...]] = reverse(NAME_TO_ID)
 
 # CLIENT_ID_TO_NAME: 选手端十六进制 ID (0x0101, 0x0102...) -> 名称
 # 用于 MQTT client_id 连接参数
@@ -141,6 +170,7 @@ NAME_TO_CLIENT_ID: dict[str, int | tuple[int, ...]] = {
     RED_ENGINEER: 0x0102,
     RED_INFANTRY: (0x0103, 0x0104, 0x0105),
     RED_AIR: 0x0106,
+    
     BLUE_HERO: 0x0165,
     BLUE_ENGINEER: 0x0166,
     BLUE_INFANTRY: (0x0167, 0x0168, 0x0169),
@@ -149,17 +179,7 @@ NAME_TO_CLIENT_ID: dict[str, int | tuple[int, ...]] = {
 }
 
 # CLIENT_ID_TO_NAME: 选手端十六进制 ID -> 名称
-CLIENT_ID_TO_NAME: dict[int, str] = {}
-
-# 反向构建映射
-for name, client_ids in NAME_TO_CLIENT_ID.items():
-    if isinstance(client_ids, tuple):
-        # 如果是元组，遍历每个ID
-        for client_id in client_ids:
-            CLIENT_ID_TO_NAME[client_id] = name
-    else:
-        # 如果是单个ID
-        CLIENT_ID_TO_NAME[client_ids] = name
+CLIENT_ID_TO_NAME: dict[int, str] = reverse(NAME_TO_CLIENT_ID)
 
 ALLOWED_CLIENT_ID: list[int] = list(CLIENT_ID_TO_NAME.keys())
 
@@ -208,3 +228,15 @@ if __name__ == "__main__":
     print(player)
     id_2 = player.get_cli_id()
     print(id_2, id_2 == 0x0104)
+
+
+if __name__ == "__main__":
+    # 测试 ID 和名称的映射关系
+    for name, id_ in NAME_TO_ID.items():
+        print(f"{name} -> {id_}")
+    for id_, name in ID_TO_NAME.items():
+        print(f"{id_} -> {name}")
+    for name, client_id in NAME_TO_CLIENT_ID.items():
+        print(f"{name} -> {client_id}")
+    for client_id, name in CLIENT_ID_TO_NAME.items():
+        print(f"{client_id} -> {name}")

@@ -67,7 +67,7 @@ class MQTTStateManager:
 
 class RMMQTTClient:
     def __init__(self, cli_id, host, port, subscribe_topics=None, handler=None, callback = None, description="default") -> None:
-        self.client = mqtt.Client(client_id=cli_id)
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, client_id=cli_id)
         
         self.host = host
         self.port = port

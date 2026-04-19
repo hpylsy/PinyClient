@@ -15,27 +15,28 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-namespace {
-std::atomic<bool> g_stop{false};
-
-constexpr int kUdpListenPort = 12345;
-constexpr size_t kPacketSize = 300;
-// [官方环境约束]
-// Broker 固定为 192.168.12.1:3333（RoboMaster 2026 协议文档）。
-constexpr const char * kMqttServer = "tcp://192.168.12.1:3333";
-// [身份约束]
-// client_id 必须使用官方允许的选手端编号字符串（如红方英雄 0x0101 的十进制字符串 1）。
-// 当前值用于联调，请按赛场分配规则替换，避免与在线客户端身份冲突。
-constexpr const char * kMqttClientId = "1";
-constexpr const char * kMqttTopic = "CustomByteBlock";
-constexpr int kMqttQos = 0;
-
-void signal_handler(int)
+namespace
 {
-  g_stop.store(true);
-}
+  std::atomic<bool> g_stop{false};
 
-}  // namespace
+  constexpr int kUdpListenPort = 12345;
+  constexpr size_t kPacketSize = 300;
+  // [官方环境约束]
+  // Broker 固定为 192.168.12.1:3333（RoboMaster 2026 协议文档）。
+  constexpr const char *kMqttServer = "tcp://192.168.12.1:3333";
+  // [身份约束]
+  // client_id 必须使用官方允许的选手端编号字符串（如红方英雄 0x0101 的十进制字符串 1）。
+  // 当前值用于联调，请按赛场分配规则替换，避免与在线客户端身份冲突。
+  constexpr const char *kMqttClientId = "2";
+  constexpr const char *kMqttTopic = "CustomByteBlock";
+  constexpr int kMqttQos = 0;
+
+  void signal_handler(int)
+  {
+    g_stop.store(true);
+  }
+
+} // namespace
 
 int main()
 {
@@ -46,29 +47,38 @@ int main()
   conn_opts.set_clean_session(true);
   conn_opts.set_automatic_reconnect(true);
 
-  try {
+  try
+  {
     std::cout << "[Mock Gateway] Connecting MQTT: " << kMqttServer << std::endl;
     mqtt_client.connect(conn_opts)->wait();
     std::cout << "[Mock Gateway] MQTT connected, topic=" << kMqttTopic << std::endl;
-  } catch (const mqtt::exception & e) {
+  }
+  catch (const mqtt::exception &e)
+  {
     std::cerr << "[Mock Gateway][ERROR] MQTT connect failed: " << e.what() << std::endl;
     return 1;
   }
 
   const int udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
-  if (udp_fd < 0) {
+  if (udp_fd < 0)
+  {
     std::cerr << "[Mock Gateway][ERROR] socket() failed: " << std::strerror(errno) << std::endl;
-    try {
-      if (mqtt_client.is_connected()) {
+    try
+    {
+      if (mqtt_client.is_connected())
+      {
         mqtt_client.disconnect()->wait();
       }
-    } catch (const mqtt::exception &) {
+    }
+    catch (const mqtt::exception &)
+    {
     }
     return 2;
   }
 
   int reuse_addr = 1;
-  if (setsockopt(udp_fd, SOL_SOCKET, SO_REUSEADDR, &reuse_addr, sizeof(reuse_addr)) != 0) {
+  if (setsockopt(udp_fd, SOL_SOCKET, SO_REUSEADDR, &reuse_addr, sizeof(reuse_addr)) != 0)
+  {
     std::cerr << "[Mock Gateway][WARN] setsockopt(SO_REUSEADDR) failed: "
               << std::strerror(errno) << std::endl;
   }
@@ -79,15 +89,20 @@ int main()
   listen_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   listen_addr.sin_port = htons(kUdpListenPort);
 
-  if (bind(udp_fd, reinterpret_cast<const sockaddr *>(&listen_addr), sizeof(listen_addr)) != 0) {
+  if (bind(udp_fd, reinterpret_cast<const sockaddr *>(&listen_addr), sizeof(listen_addr)) != 0)
+  {
     std::cerr << "[Mock Gateway][ERROR] bind(udp:" << kUdpListenPort << ") failed: "
               << std::strerror(errno) << std::endl;
     close(udp_fd);
-    try {
-      if (mqtt_client.is_connected()) {
+    try
+    {
+      if (mqtt_client.is_connected())
+      {
         mqtt_client.disconnect()->wait();
       }
-    } catch (const mqtt::exception &) {
+    }
+    catch (const mqtt::exception &)
+    {
     }
     return 3;
   }
@@ -99,41 +114,49 @@ int main()
   uint64_t forwarded_since_log = 0;
   auto last_log_tp = std::chrono::steady_clock::now();
 
-  while (!g_stop.load()) {
+  while (!g_stop.load())
+  {
     sockaddr_in src_addr;
     socklen_t src_len = sizeof(src_addr);
     const ssize_t n = recvfrom(
-      udp_fd,
-      packet.data(),
-      packet.size(),
-      0,
-      reinterpret_cast<sockaddr *>(&src_addr),
-      &src_len);
+        udp_fd,
+        packet.data(),
+        packet.size(),
+        0,
+        reinterpret_cast<sockaddr *>(&src_addr),
+        &src_len);
 
-    if (n < 0) {
-      if (errno == EINTR && g_stop.load()) {
+    if (n < 0)
+    {
+      if (errno == EINTR && g_stop.load())
+      {
         break;
       }
-      if (errno == EINTR) {
+      if (errno == EINTR)
+      {
         continue;
       }
       std::cerr << "[Mock Gateway][WARN] recvfrom failed: " << std::strerror(errno) << std::endl;
       continue;
     }
 
-    if (static_cast<size_t>(n) != kPacketSize) {
+    if (static_cast<size_t>(n) != kPacketSize)
+    {
       continue;
     }
 
-    try {
+    try
+    {
       auto msg = mqtt::make_message(
-        kMqttTopic,
-        reinterpret_cast<const void *>(packet.data()),
-        packet.size());
+          kMqttTopic,
+          reinterpret_cast<const void *>(packet.data()),
+          packet.size());
       msg->set_qos(kMqttQos);
       msg->set_retained(false);
       mqtt_client.publish(msg);
-    } catch (const mqtt::exception & e) {
+    }
+    catch (const mqtt::exception &e)
+    {
       std::cerr << "[Mock Gateway][ERROR] MQTT publish failed: " << e.what() << std::endl;
       break;
     }
@@ -144,9 +167,10 @@ int main()
     const auto now = std::chrono::steady_clock::now();
     const bool hit_batch = (forwarded_since_log >= 50);
     const bool hit_interval =
-      (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_log_tp).count() >= 1000);
+        (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_log_tp).count() >= 1000);
 
-    if (hit_batch || hit_interval) {
+    if (hit_batch || hit_interval)
+    {
       std::cout << "[Mock Gateway] Forwarded " << forwarded_total
                 << " packets to MQTT..." << std::endl;
       forwarded_since_log = 0;
@@ -156,12 +180,16 @@ int main()
 
   close(udp_fd);
 
-  try {
-    if (mqtt_client.is_connected()) {
+  try
+  {
+    if (mqtt_client.is_connected())
+    {
       mqtt_client.disconnect()->wait();
       std::cout << "[Mock Gateway] MQTT disconnected" << std::endl;
     }
-  } catch (const mqtt::exception & e) {
+  }
+  catch (const mqtt::exception &e)
+  {
     std::cerr << "[Mock Gateway][WARN] MQTT disconnect failed: " << e.what() << std::endl;
   }
 

@@ -67,13 +67,12 @@ if __name__ == '__main__':
     # 两者语义不同，禁止复用为同一个 host 参数。
     service = CoreService(
         side=consts.Sides.RED,
-        robot=consts.RobotTypes.HERO,
-        infantry_select=0,
+        robot=consts.RobotTypes.INFANTRY,
+        infantry_select=2,
         mqtt_host="192.168.12.1", 
         udp_bind_host="0.0.0.0",
     )
     service.run(blocking=False)
-
     try:
         # Flask 必须跑在主线程；关闭 reloader，避免开发重载导致 service 重复初始化。
         app.run(host='127.0.0.1', port=5000, use_reloader=False)
