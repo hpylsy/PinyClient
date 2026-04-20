@@ -161,7 +161,7 @@ NAME_TO_ID: dict[str, int | tuple[int, ...]] = {
 }
 
 # NAME_TO_ID: 名称 -> 数字 ID 的反向映射
-ID_TO_NAME: dict[str, int | tuple[int, ...]] = reverse(NAME_TO_ID)
+ID_TO_NAME: dict[int, str] = reverse(NAME_TO_ID)
 
 # CLIENT_ID_TO_NAME: 选手端十六进制 ID (0x0101, 0x0102...) -> 名称
 # 用于 MQTT client_id 连接参数
@@ -229,6 +229,12 @@ if __name__ == "__main__":
     id_2 = player.get_cli_id()
     print(id_2, id_2 == 0x0104)
 
+@dataclass
+class TestConfig:
+    if_test: bool = False
+
+    if_mqtt_source: bool = False
+    if_udp_source: bool = False
 
 if __name__ == "__main__":
     # 测试 ID 和名称的映射关系

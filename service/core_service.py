@@ -1,5 +1,6 @@
 import sys
 import time
+from pprint import pprint
 import threading
 sys.path.append("..")  # 将上级目录添加到模块搜索路径中
 from enum import Enum
@@ -15,7 +16,7 @@ logger = RMColorLogger("CoreService")
 
 class CoreService:
     def __init__(self, side: consts.Sides, robot:consts.RobotTypes, infantry_select: int = 0, host: str = "127.0.0.1", mqtt_host: str | None = None, udp_bind_host: str | None = None, port_udp: int = 3334, port_mqtt: int = 3333,
-                 subscribe_topics: set[str] = consts.DOWNLINK_TOPICS, publish_topics: set[str] = consts.UPLINK_TOPICS
+                 subscribe_topics: set[str] = consts.DOWNLINK_TOPICS, publish_topics: set[str] = consts.UPLINK_TOPICS, test_config:consts.TestConfig = consts.TestConfig()
                  ):
         # self.host = host
         # self.port_udp = port_udp
@@ -34,11 +35,12 @@ class CoreService:
         self.normal_source = NormalImgSource(host=udp_target_host, port=port_udp)
         self.mqtt_source = MqttImgSource(mqtt=self.core_mqtt)  # 将MQTT客户端实例传入图传数据源，使其能够直接从MQTT消息中获取图像数据
         self._stop_event = threading.Event()
-        self._mode_monitor_thread: threading.Thread | None = None
-        self.is_hero_old = False
+        self._mode_monitor_thread: threading.Thread = threading.Thread(target=self._mode_monitor_loop, daemon=True)
+        self.if_mqtt_source = False
         # self.main_method = main_method
         # self.main_method_args = main_method_args
         # self.main_method_kwargs = main_method_kwargs  # 可选的主方法，在 run() 中调用
+        self.test_config = test_config
 
     def publish(self, topic: str, message: dict):
         if topic not in consts.UPLINK_TOPICS:
@@ -62,45 +64,39 @@ class CoreService:
 
     def _mode_monitor_loop(self):
         """根据 DeployModeStatusSync 动态切换图传数据源。"""
-        # is_hero_old = False
-        first_check = False
-        while not self._stop_event.is_set():
-            # logger.info(self.core_mqtt.state_manager.get("DeployModeStatusSync", "status"))  # 输出当前状态以便调试
-            is_hero = self.core_mqtt.state_manager.get("DeployModeStatusSync", "status") == 1
-            if is_hero != self.is_hero_old or not first_check:
-                if is_hero:
-                    logger.info("检测到吊射模式，启用MQTT图传数据源")
-                    self.mqtt_source.start()
-                    self.normal_source.stop()  # 确保另一个数据源停止
-                    
+        if not self.test_config.if_test:
+            first_check = False
+            while not self._stop_event.is_set():
+                if_mqtt_source_cur = self.core_mqtt.state_manager.get("DeployModeStatusSync", "status") == 1
+                if if_mqtt_source_cur != self.if_mqtt_source or not first_check:
+                    if if_mqtt_source_cur:
+                        logger.info("检测到吊射模式，启用MQTT图传数据源")
+                        self.mqtt_source.start()
+                        self.normal_source.stop()  # 确保另一个数据源停止
+                    else:
+                        logger.info("未检测到吊射模式，启用UDP图传数据源")
+                        self.normal_source.start()
+                        self.mqtt_source.stop()  # 确保另一个数据源停止
+                    self.if_mqtt_source = if_mqtt_source_cur
+                    first_check = True
                 else:
-                    logger.info("未检测到吊射模式，启用UDP图传数据源")
-                    self.normal_source.start()
-                    self.mqtt_source.stop()  # 确保另一个数据源停止
-                self.is_hero_old = is_hero
-                first_check = True
+                    logger.debug(f"吊射模式状态未变化，当前状态: {'吊射' if if_mqtt_source_cur else '非吊射'}")
+                self._stop_event.wait(1.0)
+        else:
+            logger.warning("测试模式：跳过 DeployModeStatusSync 检测，直接根据测试配置启用图传数据源")
+            if self.test_config.if_mqtt_source:
+                logger.warning("测试配置：直接启用MQTT图传数据源")
+                self.mqtt_source.start()
+                self.if_mqtt_source = True
+                assert self.test_config.if_udp_source == False, "测试配置错误：MQTT和UDP数据源不能同时启用"
+            elif self.test_config.if_udp_source:
+                logger.warning("测试配置：直接启用UDP图传数据源")
+                self.normal_source.start()
+                self.if_mqtt_source = False
+                assert self.test_config.if_mqtt_source == False, "测试配置错误：MQTT和UDP数据源不能同时启用"
             else:
-                logger.debug(f"吊射模式状态未变化，当前状态: {'吊射' if is_hero else '非吊射'}")
-
-            self._stop_event.wait(1.0)
+                logger.warning("测试配置：未启用任何图传数据源，生成器将无法获取视频帧")
     
-    # def test_mode_monitor_loop(self):
-    #     """测试用的模式监控循环，模拟 DeployModeStatusSync 状态变化。"""
-    #     for i in range(5):
-    #         is_hero = (i % 2 == 0)
-    #         logger.info(f"测试模式监控循环，模拟状态: {'吊射' if is_hero else '非吊射'}")
-    #         if is_hero != self.is_hero_old:
-    #             if is_hero:
-    #                 logger.info("测试：启用MQTT图传数据源")
-    #                 self.mqtt_source.start()
-    #                 self.normal_source.stop()  # 确保另一个数据源停止
-    #             else:
-    #                 logger.info("测试：启用UDP图传数据源")
-    #                 self.normal_source.start()
-    #                 self.mqtt_source.stop()  # 确保另一个数据源停止
-    #             self.is_hero_old = is_hero
-    #         time.sleep(5)
-
     def start(self):
         """核心启动逻辑"""
         if self._mode_monitor_thread and self._mode_monitor_thread.is_alive():
@@ -109,7 +105,6 @@ class CoreService:
 
         self._stop_event.clear()
         self.core_mqtt.start()
-        self._mode_monitor_thread = threading.Thread(target=self._mode_monitor_loop, daemon=True)
         self._mode_monitor_thread.start()
 
     def run(self, blocking: bool = True):
@@ -119,7 +114,6 @@ class CoreService:
             if not blocking:
                 logger.info("CoreService 已在后台启动（非阻塞模式）")
                 return
-
             # if self.main_method:
             #     logger.info("主线程方法开始执行，CoreService 将继续保持运行，等待退出信号...")
             #     # main_method（如 Flask app.run）通常是阻塞调用，返回即视为主线程方法结束。
@@ -127,11 +121,11 @@ class CoreService:
             #     logger.info("主线程方法已返回，CoreService 即将停止...")
             #     self.stop()
             #     return
-
             while not self._stop_event.is_set():
                 time.sleep(0.5)
         except KeyboardInterrupt:
-            logger.info("收到退出信号，正在关闭 CoreService...")
+            logger.warning("收到退出信号，正在关闭 CoreService...")
+            # exit()
             self.stop()
 
     def stop(self):
@@ -148,20 +142,48 @@ class CoreService:
         self.mqtt_source.stop()
         logger.info("所有核心服务已停止")
 
-    def get(self, topic: str, key: str | None = None) -> dict | str | int | list | None:
-        """根据主题和字段名获取当前状态值"""
-        return self.core_mqtt.state_manager.get(topic, key)
-
     def get_cur_handler(self) -> NormalImgSource | MqttImgSource:
         """获取当前使用的图传数据源实例，便于外部直接调用 get_frame() 获取图像数据。"""
-        if self.is_hero_old:
+        if self.if_mqtt_source:
             return self.mqtt_source
         else:
             return self.normal_source
     
+    def get(self, topic: str, key: str | None = None) -> dict | str | int | list | None:
+        """根据主题和字段名获取当前状态值"""
+        return self.core_mqtt.state_manager.get(topic, key)
+    
     def get_all(self) -> dict:
         """获取所有状态数据，便于调试使用。"""
         return self.core_mqtt.state_manager.get_all()
+    
+    # 测试辅助方法
+
+    def print_all_topics(self):
+        pprint(self.get_all())
+    
+    def print_topic(self, topic: str):
+        pprint(self.get(topic))
+    
+    def print_topic_key(self, topic: str, key: str):
+        print(self.get(topic, key))
+
+    def print_if_alive(self):
+        """检查核心服务的基本运行状态，便于外部调用时快速判断服务是否正常工作。"""
+        mqtt_alive: bool = self.core_mqtt.client.is_connected()
+        try:
+            _ = self.normal_source.sock.getpeername()
+            udp_alive = True
+        except Exception:
+            udp_alive = False
+        udp_source_alive: bool = bool(self.normal_source.decode_thread.is_alive) if self.normal_source.decode_thread else False
+        mqtt_source_alive: bool = bool(self.mqtt_source.decode_thread.is_alive) if self.mqtt_source.decode_thread else False
+        dynamic_switch_alive: bool = bool(self._mode_monitor_thread.is_alive) if self._mode_monitor_thread else False
+        print(f"MQTT 连接状态: {mqtt_alive}\nUDP socket状态: {udp_alive}\nMQTT 链路解码线程状态: {mqtt_source_alive}\nUDP 链路解码线程状态: {udp_source_alive}\n当前图传数据源: {'MQTT' if self.if_mqtt_source else 'UDP'}\n图传源服务动态切换线程状态:{dynamic_switch_alive}")
+
+    def print_current_source(self):
+        """打印当前使用的图传数据源，便于外部调用时快速判断当前模式。"""
+        print(f"当前图传数据源: {'MQTT' if self.if_mqtt_source else 'UDP'}")
 
 if __name__ == "__main__":
     service = CoreService(side=consts.Sides.RED, robot=consts.RobotTypes.INFANTRY, infantry_select=2)

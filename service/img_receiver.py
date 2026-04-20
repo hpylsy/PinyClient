@@ -286,7 +286,7 @@ class MqttImgSource:
         now = time.time()
         if now - self.stats.last_stats_ts < MQTT_STATS_LOG_INTERVAL_SEC:
             return
-        logger.info(
+        logger.debug(
             "MQTT解码统计: rx=%d bad=%d push=%d frame=%d queue=%d",
             self.stats.rx_packets,
             self.stats.bad_packets,
@@ -371,7 +371,7 @@ class NormalImgSource(ImgSource):
         super().__init__()
         self._bind_host = host
         self._bind_port = port
-        self.decode_thread: Optional[threading.Thread] = None
+        self.decode_thread = threading.Thread(target=self._decode_loop, daemon=True)
         self.packet_queue: Queue[bytes] = Queue(maxsize=RTP_QUEUE_MAXSIZE)
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -556,7 +556,7 @@ class NormalImgSource(ImgSource):
         self.pipeline.set_state(Gst.State.PLAYING)
         self.running = True
         self.receive_thread = threading.Thread(target=self._receive_loop, daemon=True)
-        self.decode_thread = threading.Thread(target=self._decode_loop, daemon=True)
+        
         self.receive_thread.start()
         self.decode_thread.start()
         logger.info("UDP服务器线程与HEVC解码线程已启动")

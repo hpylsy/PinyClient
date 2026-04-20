@@ -139,6 +139,6 @@ python app.py
    ```
 3. 启动(在根目录): `python app.py` 或 `python3 app.py`
 4. 启动 `mock gateway`（注意，这里监听的MQTT 端口为3333）(cd service/sniper & source install/setup.zsh): `./install/doorlock_stream_e2e/bin/mock_gateway`
-5. 启动 `gst_e2e_sender`: `./install/doorlock_stream_e2e/bin/gst_e2e_sender --mode file --file video.mp4 --host 127.0.0.1 --port 12345 --fps 30 --bitrate 300 --enable-display true`
+5. 启动 `gst_e2e_sender`: `./install/doorlock_stream_e2e/bin/gst_e2e_sender --mode file --file video.mp4 --host 127.0.0.1 --port 12345 --fps 30 --bitrate 300 --enable-display false`
 6. 启动SharkDataServer（或其他MQTT Broker）
 7. 启动 `test_udp_sender`: `cd service`, `python test_udp_sender.py`

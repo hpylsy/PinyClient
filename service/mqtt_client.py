@@ -122,10 +122,7 @@ class RMMQTTClient:
                     # instead of protobuf-serialized bytes; keep a compatibility fallback.
                     if msg.topic == "CustomByteBlock" and hasattr(parsed_msg, "data"):
                         parsed_msg.data = msg.payload
-                        logger.debug(
-                            "MQTT: %s 收到原始 CustomByteBlock 载荷，已按 bytes 兼容解析",
-                            self.description,
-                        )
+
                     else:
                         raise 
                 if self.callback:
@@ -161,7 +158,7 @@ class RMMQTTClient:
         logger.debug(f"MQTT: {self.description} 消息发布成功，消息ID: {mid}")
 
     def _on_subscribe(self, client, userdata, mid, granted_qos):
-        logger.debug(f"MQTT: {self.description} 订阅成功，消息ID: {mid}, QoS: {granted_qos}")
+        logger.debug(f"MQTT: {self.description} 订阅成功, userdata: {userdata}, 消息ID: {mid}, QoS: {granted_qos}")
 
     def connect(self):
         with self._state_lock:
