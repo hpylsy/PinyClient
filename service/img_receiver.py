@@ -18,6 +18,7 @@ sys.path.append("..")  # 添加项目根目录到sys.path，方便导入模块
 
 from .mqtt_client import RMMQTTClient
 from models.message import NormalUDPPackage
+from models.protocol import messages_pb2 as _pb
 from tools.rm_logger import RMColorLogger
 
 logger = RMColorLogger("UDPReceiver")
@@ -214,7 +215,19 @@ class MqttImgSource:
                 break
 
     def _on_raw_custom_byte_block(self, payload: bytes):
-        rtp_data = self._decode_custom_byte_block(payload)
+        """处理 MQTT CustomByteBlock 载荷。
+        
+        官方系统发送 Protobuf 序列化的 CustomByteBlock（~303B），
+        其中 data 字段承载 300B 固定包。
+        也兼容直接发送原始 300B 的旧 mock_gateway 格式。
+        """
+        raw_300b = self._extract_custom_byte_block_data(payload)
+        if raw_300b is None:
+            self.stats.bad_packets += 1
+            self._log_stats()
+            return
+
+        rtp_data = self._decode_custom_byte_block(raw_300b)
         if rtp_data is None:
             self._log_stats()
             return
@@ -232,6 +245,31 @@ class MqttImgSource:
             except Full:
                 pass
         self._log_stats()
+
+    @staticmethod
+    def _extract_custom_byte_block_data(payload: bytes) -> Optional[bytes]:
+        """从 MQTT payload 中提取 300B 原始数据。
+        
+        优先尝试 Protobuf 反序列化（官方格式），
+        若失败且长度为 300 则视为原始格式（兼容模式）。
+        """
+        if payload is None:
+            return None
+
+        # 尝试 Protobuf 反序列化
+        try:
+            pb_msg = _pb.CustomByteBlock()
+            pb_msg.ParseFromString(payload)
+            if len(pb_msg.data) == CUSTOM_BLOCK_SIZE:
+                return pb_msg.data
+        except Exception:
+            pass
+
+        # 兼容模式：原始 300B 字节
+        if len(payload) == CUSTOM_BLOCK_SIZE:
+            return payload
+
+        return None
 
     def _push_rtp_data(self, rtp_data: bytes) -> bool:
         if not rtp_data:
