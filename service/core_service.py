@@ -64,41 +64,71 @@ class CoreService:
         self.core_mqtt.update(data)  # 将消息对象转换为字典并更新状态
 
     def _mode_monitor_loop(self):
-        """根据 DeployModeStatusSync 动态切换图传数据源。"""
+        """
+         - 图传源策略：测试模式优先；非测试下仅英雄按状态切换，其余机型固定 UDP。
+         - 核心逻辑：
+           - 外层循环：持续监测状态变化，决定是否需要切换图传源。
+           - 第一层if-else：区分测试模式和非测试模式
+             - 测试模式：根据测试配置直接决定使用 MQTT 还是 UDP。
+             - 非测试模式：首先区分英雄和非英雄，英雄根据 DeployModeStatus 进行自动切换，非英雄固定使用 UDP。
+           - 第二个if：仅在检测到策略变化时执行切换逻辑，避免重复切换带来的性能损耗和潜在问题。
+             - 第一层if-else：根据目标策略切换到 MQTT 或 UDP，并记录切换原因（测试模式、自动模式、非英雄默认等），便于日志分析和调试。
+             - 第二层if-else：在切换图传源时保持互斥，确保 MQTT 和 UDP 数据源不会同时运行，避免资源冲突和不确定行为。
+        """
+        
         current_policy: str | None = None
+        is_hero_robot = self.player_type.Robot == consts.RobotTypes.HERO
+
         while not self._stop_event.is_set():
+            next_policy: str
+            next_use_mqtt: bool | None
+
             if self.test_config.if_test:
+                assert not (self.test_config.if_mqtt_source and self.test_config.if_udp_source), "测试配置错误：MQTT和UDP数据源不能同时启用"
                 if self.test_config.if_mqtt_source:
-                    assert self.test_config.if_udp_source is False, "测试配置错误：MQTT和UDP数据源不能同时启用"
-                    if current_policy != "test_mqtt":
-                        logger.warning("测试配置：启用MQTT图传数据源")
-                        self._apply_source(use_mqtt=True, reason="测试模式")
-                        current_policy = "test_mqtt"
+                    next_policy = "test_mqtt"
+                    next_use_mqtt = True
                 elif self.test_config.if_udp_source:
-                    assert self.test_config.if_mqtt_source is False, "测试配置错误：MQTT和UDP数据源不能同时启用"
-                    if current_policy != "test_udp":
-                        logger.warning("测试配置：启用UDP图传数据源")
-                        self._apply_source(use_mqtt=False, reason="测试模式")
-                        current_policy = "test_udp"
+                    next_policy = "test_udp"
+                    next_use_mqtt = False
                 else:
-                    if current_policy != "test_none":
-                        logger.warning("测试配置：未启用任何图传数据源，生成器将无法获取视频帧")
-                        with self._source_switch_lock:
-                            self.mqtt_source.stop()
-                            self.normal_source.stop()
-                        current_policy = "test_none"
+                    next_policy = "test_none"
+                    next_use_mqtt = None
             else:
-                if_mqtt_source_cur = self.core_mqtt.state_manager.get("DeployModeStatusSync", "status") == 1
-                next_policy = "auto_mqtt" if if_mqtt_source_cur else "auto_udp"
-                if current_policy != next_policy:
-                    if if_mqtt_source_cur:
-                        logger.info("检测到吊射模式，启用MQTT图传数据源")
-                    else:
-                        logger.info("未检测到吊射模式，启用UDP图传数据源")
-                    self._apply_source(use_mqtt=if_mqtt_source_cur, reason="自动模式")
-                    current_policy = next_policy
+                if not is_hero_robot:
+                    next_policy = "non_hero_udp"
+                    next_use_mqtt = False
                 else:
-                    logger.debug(f"吊射模式状态未变化，当前状态: {'吊射' if if_mqtt_source_cur else '非吊射'}")
+                    auto_use_mqtt = self.core_mqtt.state_manager.get("DeployModeStatusSync", "status") == 1
+                    next_policy = "auto_mqtt" if auto_use_mqtt else "auto_udp"
+                    next_use_mqtt = auto_use_mqtt
+
+            if current_policy != next_policy:
+                if next_policy == "test_mqtt":
+                    logger.warning("测试配置：启用MQTT图传数据源")
+                elif next_policy == "test_udp":
+                    logger.warning("测试配置：启用UDP图传数据源")
+                elif next_policy == "test_none":
+                    logger.warning("测试配置：未启用任何图传数据源，生成器将无法获取视频帧")
+                elif next_policy == "non_hero_udp":
+                    logger.info("当前机型非英雄，固定使用UDP图传数据源")
+                elif next_policy == "auto_mqtt":
+                    logger.info("检测到吊射模式，启用MQTT图传数据源")
+                else:
+                    logger.info("未检测到吊射模式，启用UDP图传数据源")
+
+                if next_use_mqtt is None:
+                    with self._source_switch_lock:
+                        self.mqtt_source.stop()
+                        self.normal_source.stop()
+                        self.if_mqtt_source = False
+                else:
+                    reason = "自动模式" if next_policy.startswith("auto_") else "测试模式"
+                    if next_policy == "non_hero_udp":
+                        reason = "非英雄默认UDP"
+                    self._apply_source(use_mqtt=next_use_mqtt, reason=reason)
+
+                current_policy = next_policy
 
             self._stop_event.wait(1.0)
 
@@ -131,12 +161,15 @@ class CoreService:
         self._apply_source(use_mqtt=False, reason="测试模式")
 
     def disable_test_mode(self):
-        """关闭测试模式，并按 DeployModeStatusSync 立即恢复自动策略。"""
+        """关闭测试模式：英雄按状态恢复自动策略，非英雄恢复默认 UDP。"""
         self.test_config.if_test = False
         self.test_config.if_mqtt_source = False
         self.test_config.if_udp_source = False
-        auto_use_mqtt = self.core_mqtt.state_manager.get("DeployModeStatusSync", "status") == 1
-        self._apply_source(use_mqtt=auto_use_mqtt, reason="恢复自动模式")
+        if self.player_type.Robot == consts.RobotTypes.HERO:
+            auto_use_mqtt = self.core_mqtt.state_manager.get("DeployModeStatusSync", "status") == 1
+            self._apply_source(use_mqtt=auto_use_mqtt, reason="恢复自动模式")
+        else:
+            self._apply_source(use_mqtt=False, reason="非英雄默认UDP")
     
     def start(self):
         """核心启动逻辑"""
@@ -215,7 +248,7 @@ class CoreService:
         """检查核心服务的基本运行状态，便于外部调用时快速判断服务是否正常工作。"""
         mqtt_alive: bool = self.core_mqtt.client.is_connected()
         try:
-            _ = self.normal_source.sock.getsockname()
+            _ = self.normal_source.sock.getsockname() # pyright: ignore[reportOptionalMemberAccess]
             udp_alive = True
         except Exception:
             udp_alive = False

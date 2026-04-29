@@ -48,33 +48,33 @@ class MechanismId(IntEnum):
 class EventId(IntEnum):
     """全局事件 ID（Event.event_id）。"""
     KILL = 1
-    BASE_OUTPOST_DESTROYED = 2
-    RUNE_ACTIVATION_COUNT = 3
-    RUNE_ACTIVATING = 4
-    RUNE_ACTIVATED_ARMS = 5
-    RUNE_ACTIVATED = 6
-    HERO_ENTER_DEPLOY = 7
-    HERO_SNIPER_DAMAGE_ALLY = 8
-    HERO_SNIPER_DAMAGE_ENEMY = 9
-    AIR_SUPPORT_CALLED_ALLY = 10
-    AIR_SUPPORT_INTERRUPTED_ALLY = 11
-    AIR_SUPPORT_CALLED_ENEMY = 12
-    AIR_SUPPORT_INTERRUPTED_ENEMY = 13
-    DART_HIT = 14
-    DART_GATE_OPENED = 15
-    BASE_UNDER_ATTACK = 16
-    OUTPOST_STOPPED = 17
-    BASE_ARMOR_DEPLOYED = 18
+    OUTPOST_DESTROYED = 2
+    RUNE_ACTIVATION_RESULT = 3
+    RUNE_ACTIVATED = 4
+    HERO_SNIPER_DAMAGE_ALLY = 5
+    HERO_SNIPER_DAMAGE_ENEMY = 6
+    AIR_SUPPORT_CALLED_ENEMY = 7
+    AIR_SUPPORT_COUNTERED_ENEMY = 8
+    DART_HIT = 9
+    ENEMY_DART_GATE_OPENED = 10
+    BASE_UNDER_ATTACK = 11
+    ENEMY_OUTPOST_STOPPED = 12
+    ENEMY_BASE_ARMOR_DEPLOYED = 13
+    ENEMY_LEVEL4_ASSEMBLY_BUFFER = 14
+    ASSEMBLY_RESULT = 15
 
 
-class TechCoreStatus(IntEnum):
-    """科技核心状态（TechCoreMotionStateSync.status）。"""
-    NOT_ASSEMBLING = 1
+class TechCoreBasicState(IntEnum):
+    """科技核心基础状态（TechCoreMotionStateSync.basic_state）。"""
+    INITIAL_POSITION = 1
     MOVING = 2
-    READY_FIRST_STEP = 3
-    READY_NEXT_STEP = 4
-    ALL_STEPS_DONE = 5
-    CONFIRMING = 6
+    ARRIVED = 3
+
+
+class TechCoreStepState(IntEnum):
+    """科技核心步骤状态（putin_state/move_state/rotate_state）。"""
+    NOT_DONE = 0
+    DONE = 1
 
 
 class EnemyCoreStatus(IntEnum):
@@ -229,6 +229,7 @@ class MapMarkType(IntEnum):
 
 class AssemblyOperation(IntEnum):
     """装配操作（AssemblyCommand.operation）。"""
+    START_EXCHANGE = 0
     CONFIRM = 1
     CANCEL = 2
 
@@ -260,23 +261,23 @@ class DartTarget(IntEnum):
 
 class SentryCtrlCmd(IntEnum):
     """哨兵控制指令编号（SentryCtrlCommand.command_id）。"""
+    INVALID = 0
     HEAL_AT_POINT = 1
     AMMO_AT_STATION = 2
     REMOTE_AMMO = 3
     REMOTE_HEAL = 4
     CONFIRM_RESPAWN = 5
     PAY_FOR_RESPAWN = 6
-    MAP_MARK = 7
-    SWITCH_ATTACK = 8
-    SWITCH_DEFENSE = 9
-    SWITCH_MOVE = 10
+    SWITCH_ATTACK = 7
+    SWITCH_DEFENSE = 8
+    SWITCH_MOVE = 9
 
 
 class AirSupportCmd(IntEnum):
     """空中支援指令类型（AirSupportCommand.command_id）。"""
+    CANCEL = 0
     FREE_CALL = 1
     PAID_CALL = 2
-    INTERRUPT = 3
 
 
 # =============================================
@@ -311,8 +312,6 @@ class MapClickInfoNotify(BaseMessage):
     enemy_id: int = 0
     ascii: int = 0
     type: MapMarkType = MapMarkType.MAP
-    screen_x: int = 0
-    screen_y: int = 0
     map_x: float = 0.0
     map_y: float = 0.0
     PB_CLASS = _pb.MapClickInfoNotify
@@ -544,6 +543,7 @@ class RobotPosition(BaseMessage):
     y: float = 0.0
     z: float = 0.0
     yaw: float = 0.0
+    robot_id: int = 0
     PB_CLASS = _pb.RobotPosition
 
 
@@ -580,13 +580,18 @@ class RobotPathPlanInfo(BaseMessage):
 
 
 @dataclass
+class RadarSingleRobotInfo(BaseMessage):
+    """2.2.18 单个机器人雷达位置信息。"""
+    target_pos_x: int = 0
+    target_pos_y: int = 0
+    is_high_light: HighlightType = HighlightType.NO
+    PB_CLASS = _pb.RadarSingleRobotInfo
+
+
+@dataclass
 class RadarInfoToClient(BaseMessage):
     """2.2.18 雷达机器人位置信息：服务器 -> 自定义客户端。"""
-    target_robot_id: int = 0
-    target_pos_x: float = 0.0
-    target_pos_y: float = 0.0
-    torward_angle: float = 0.0
-    is_high_light: HighlightType = HighlightType.NO
+    robot_info: list[RadarSingleRobotInfo] = field(default_factory=list)
     PB_CLASS = _pb.RadarInfoToClient
 
 
@@ -601,7 +606,10 @@ class CustomByteBlock(BaseMessage):
 class TechCoreMotionStateSync(BaseMessage):
     """2.2.21 科技核心运动状态：服务器 -> 自定义客户端。"""
     maximum_difficulty_level: int = 0
-    status: TechCoreStatus = TechCoreStatus.NOT_ASSEMBLING
+    basic_state: TechCoreBasicState = TechCoreBasicState.INITIAL_POSITION
+    putin_state: TechCoreStepState = TechCoreStepState.NOT_DONE
+    move_state: TechCoreStepState = TechCoreStepState.NOT_DONE
+    rotate_state: TechCoreStepState = TechCoreStepState.NOT_DONE
     enemy_core_status: EnemyCoreStatus = EnemyCoreStatus.NO_ASSEMBLY
     remain_time_all: int = 0
     remain_time_step: int = 0
@@ -629,7 +637,7 @@ class RuneStatusSync(BaseMessage):
     """2.2.28 能量机关状态同步：服务器 -> 自定义客户端。"""
     rune_status: RuneStatus = RuneStatus.INACTIVE
     activated_arms: int = 0
-    average_rings: int = 0
+    average_rings: float = 0.0
     PB_CLASS = _pb.RuneStatusSync
 
 

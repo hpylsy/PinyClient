@@ -114,9 +114,20 @@ class BaseMessage:
                     # repeated / map 字段不支持直接整体赋值，改为容器就地更新。
                     container = getattr(pb, name)
 
-                    if isinstance(value, (list, tuple)) and hasattr(container, 'clear') and hasattr(container, 'extend'):
+                    if isinstance(value, (list, tuple)) and hasattr(container, 'clear'):
                         container.clear()
-                        container.extend(value)
+                        for item in value:
+                            if isinstance(item, BaseMessage):
+                                item = item._ensure_pb()
+
+                            if isinstance(item, dict) and hasattr(container, 'add'):
+                                ParseDict(item, container.add())
+                            elif hasattr(container, 'append'):
+                                container.append(item)
+                            elif hasattr(container, 'extend'):
+                                container.extend([item])
+                            else:
+                                raise
                         return
 
                     if isinstance(value, dict) and hasattr(container, 'clear') and hasattr(container, 'update'):
