@@ -130,7 +130,6 @@ class Layer:
             raise IndexError("Invalid index for children")
     
 
-
 class Option:
     def __init__(self, name: str, helps: str, callback: Callable[..., Any] = lambda: None, *args, **kwargs):
         self.name = name    

@@ -1,9 +1,5 @@
 <!DOCTYPE html>
-<!--[if lt IE 7]>      <html class="no-js lt-ie9 lt-ie8 lt-ie7"> <![endif]-->
-<!--[if IE 7]>         <html class="no-js lt-ie9 lt-ie8"> <![endif]-->
-<!--[if IE 8]>         <html class="no-js lt-ie9"> <![endif]-->
-<!--[if gt IE 8]>      <html class="no-js"> <!--<![endif]-->
-<html>
+<html lang="zh-CN">
     <head>
         <meta charset="utf-8">
         <meta http-equiv="X-UA-Compatible" content="IE=edge">
@@ -11,34 +7,68 @@
         <meta name="description" content="">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+
+        <style>
+        .right-top {
+            grid-template-columns: {{ grid_config.right_up_column_widths }};
+            grid-template-rows: {{ grid_config.right_up_row_heights }};
+        }
+        .right-bottom {
+            grid-template-columns: {{ grid_config.right_down_column_widths }};
+            grid-template-rows: {{ grid_config.right_down_row_heights }};
+        }
+        .left-bottom {
+            grid-template-columns: {{ grid_config.left_down_column_widths }};
+            grid-template-rows: {{ grid_config.left_down_row_heights }};
+        }
+        </style>
     </head>
+    
     <body>
         <!--[if lt IE 7]>
             <p class="browsehappy">You are using an <strong>outdated</strong> browser. Please <a href="#">upgrade your browser</a> to improve your experience.</p>
         <![endif]-->
         <div class="dashboard">
             <div class="left-top">
-                <div class="video-block">
-                    <img src="{{ url_for('video_feed') }}" class="video-stream" alt="Video Stream">
-                </div>
+                <img src="{{ url_for('video_feed') }}" class="video-stream" alt="Video Stream">
             </div>
             <div class="right-top">
-                <p>
-                    右上角内容
-                </p>
+                {% for component in components.right_up %}
+                    <section
+                        class="rm-component"
+                        id="component-{{ component.id }}"
+                        data-component-id="{{ component.id }}"
+                        style="{{ component.css_style() }}"
+                    >
+                        {{ render_component(component)|safe }}
+                    </section>
+                {% endfor %}
             </div>
             <div class="left-bottom">
-                <p>
-                    左下角内容
-                </p>
+                {% for component in components.left_down %}
+                    <section
+                        class="rm-component"
+                        id="component-{{ component.id }}"
+                        data-component-id="{{ component.id }}"
+                        style="{{ component.css_style() }}"
+                    >
+                        {{ render_component(component)|safe }}
+                    </section>
+                {% endfor %}
             </div>
             <div class="right-bottom">
-                <p>
-                    右下角内容
-                </p>
+                {% for component in components.right_down %}
+                    <section
+                        class="rm-component"
+                        id="component-{{ component.id }}"
+                        data-component-id="{{ component.id }}"
+                        style="{{ component.css_style() }}"
+                    >
+                        {{ render_component(component)|safe }}
+                    </section>
+                {% endfor %}
             </div>
         </div>
-        <script src="" async defer></script>
+        <script src="{{ url_for('static', filename='js/components.js') }}"></script>
     </body>
 </html>
-

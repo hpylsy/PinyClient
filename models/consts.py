@@ -217,17 +217,17 @@ def get_id_by_name(name: str):
         raise ValueError(f"未知的机器人名称: {name}")
     return NAME_TO_ID[name]
 
-if __name__ == "__main__":
-    # 英雄测试（普通兵种）
-    player = PlayerTypes(Sides.BLUE, RobotTypes.HERO)
-    print(player)
-    id_1 = player.get_cli_id()
-    print(id_1, id_1 == 0x0165)
-    # 步兵测试(红2步兵，client_id：0x0104)(索引从1开始)
-    player = PlayerTypes(Sides.RED, RobotTypes.INFANTRY, Infantry_Select=2)
-    print(player)
-    id_2 = player.get_cli_id()
-    print(id_2, id_2 == 0x0104)
+# if __name__ == "__main__":
+#     # 英雄测试（普通兵种）
+#     player = PlayerTypes(Sides.BLUE, RobotTypes.HERO)
+#     print(player)
+#     id_1 = player.get_cli_id()
+#     print(id_1, id_1 == 0x0165)
+#     # 步兵测试(红2步兵，client_id：0x0104)(索引从1开始)
+#     player = PlayerTypes(Sides.RED, RobotTypes.INFANTRY, Infantry_Select=2)
+#     print(player)
+#     id_2 = player.get_cli_id()
+#     print(id_2, id_2 == 0x0104)
 
 @dataclass
 class TestConfig:
@@ -235,6 +235,9 @@ class TestConfig:
 
     if_mqtt_source: bool = False
     if_udp_source: bool = False
+
+
+
 
 if __name__ == "__main__":
     # 测试 ID 和名称的映射关系

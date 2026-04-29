@@ -1,0 +1,25 @@
+<div class="component-panel component-game-status">
+    <div class="component-title">比赛状态</div>
+    <div class="component-grid two-cols">
+        <div class="metric">
+            <span class="metric-label">阶段</span>
+            <strong data-field="current_stage_label">{{ current_stage_label }}</strong>
+        </div>
+        <div class="metric">
+            <span class="metric-label">倒计时</span>
+            <strong data-field="stage_countdown_sec">{{ stage_countdown_sec }}</strong>
+        </div>
+        <div class="metric">
+            <span class="metric-label">红方</span>
+            <strong data-field="red_score">{{ red_score }}</strong>
+        </div>
+        <div class="metric">
+            <span class="metric-label">蓝方</span>
+            <strong data-field="blue_score">{{ blue_score }}</strong>
+        </div>
+        <div class="metric wide">
+            <span class="metric-label">暂停</span>
+            <strong data-field="is_paused">{{ is_paused }}</strong>
+        </div>
+    </div>
+</div>

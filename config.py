@@ -1,5 +1,5 @@
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # BASE_DIR = Path(__file__).parent
 
@@ -45,3 +45,70 @@ class Config:
     # def mqtt_client_id(self) -> str:
     #     return f"custom_client_{self.port}"
 
+# @dataclass(frozen=True)
+# class WebConfig:
+#     """
+#      - 配置网格
+#      - 配置网格内部的组件
+#     """
+#     Grid: dict[str, tuple[int, int]] = ({"left-down": (2, 6), "right-down": (2, 2), "right-up": (4, 2)})
+#     Components: dict[str, str] = {}
+
+@dataclass
+class GridConfig:
+    """
+     - 右上，右下，左下
+     - 每个区域的行列数
+     - 每个区域的组件列表
+    """
+    right_up: tuple[int, int] = (4, 2)
+    right_down: tuple[int, int] = (2, 2)
+    left_down: tuple[int, int] = (2, 6)
+    # components: dict[str, list[str]] = field(default_factory=dict)  # 组件列表，按区域划分
+
+    # def __post_init__(self):
+    #     # 计算列宽和行高的 CSS 样式字符串
+    #     self.column_widths = self._calculate_column_widths()
+    #     self.row_heights = self._calculate_row_heights()
+
+    # def _get_raw_html_widths(self, area: str) -> str:
+    #     return f"grid-template-columns: repeat({getattr(self, area)[1]}, 1fr); grid-template-rows: repeat({getattr(self, area)[0]}, 1fr);"
+    
+    def _calculate_column_widths(self, area: str) -> str:
+        # 以右上区域为例，其他区域可类似处理
+        return f"repeat({getattr(self, area)[1]}, 1fr);"
+
+    def _calculate_row_heights(self, area: str) -> str:
+        # 以右上区域为例，其他区域可类似处理
+        return f"repeat({getattr(self, area)[0]}, 1fr);"
+
+    @property
+    def right_up_column_widths(self) -> str:
+        return self._calculate_column_widths("right_up")
+    
+    @property
+    def right_up_row_heights(self) -> str:
+        return self._calculate_row_heights("right_up")
+
+    @property
+    def right_down_column_widths(self) -> str:
+        return self._calculate_column_widths("right_down")
+    
+    @property
+    def right_down_row_heights(self) -> str:
+        return self._calculate_row_heights("right_down")
+    
+    @property
+    def left_down_column_widths(self) -> str:
+        return self._calculate_column_widths("left_down")
+    
+    @property
+    def left_down_row_heights(self) -> str:
+        return self._calculate_row_heights("left_down")
+
+
+
+
+if __name__ == "__main__":
+    grid_config = GridConfig()
+    print(grid_config.right_up_column_widths, grid_config.right_up_row_heights)

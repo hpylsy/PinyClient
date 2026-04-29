@@ -1,0 +1,29 @@
+<div class="component-panel component-robot-dynamic">
+    <div class="component-title">机器人实时状态</div>
+    <div class="component-grid two-cols">
+        <div class="metric">
+            <span class="metric-label">血量</span>
+            <strong data-field="current_health">{{ current_health }}</strong>
+        </div>
+        <div class="metric">
+            <span class="metric-label">热量</span>
+            <strong data-field="current_heat">{{ current_heat }}</strong>
+        </div>
+        <div class="metric">
+            <span class="metric-label">弹量</span>
+            <strong data-field="remaining_ammo">{{ remaining_ammo }}</strong>
+        </div>
+        <div class="metric">
+            <span class="metric-label">底盘能量</span>
+            <strong data-field="current_chassis_energy">{{ current_chassis_energy }}</strong>
+        </div>
+        <div class="metric">
+            <span class="metric-label">缓冲能量</span>
+            <strong data-field="current_buffer_energy">{{ current_buffer_energy }}</strong>
+        </div>
+        <div class="metric">
+            <span class="metric-label">离战</span>
+            <strong data-field="is_out_of_combat">{{ is_out_of_combat }}</strong>
+        </div>
+    </div>
+</div>

@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-// RoboMaster 2026 自定义客户端通信协议 V1.2.0 (20260209)
+// RoboMaster 2026 自定义客户端通信协议 V1.3.0 (20260326)
 
 // === 上行消息 (Client -> Server) ===
 
@@ -24,8 +24,8 @@ message CustomControl {
 
 // 云台手地图点击标记 (触发式)
 // is_send_all: 0=指定客户端, 1=除哨兵, 2=包含哨兵
-// type: 1=攻击, 2=防御, 3=警戒, 4=自定义
-// mode: 1=地图, 2=对方机器人
+// mode: 1=攻击, 2=防御, 3=警戒, 4=自定义
+// type: 1=地图, 2=对方机器人
 message MapClickInfoNotify {
     uint32 is_send_all = 1;
     bytes robot_id = 2;
@@ -33,14 +33,12 @@ message MapClickInfoNotify {
     uint32 enemy_id = 4;
     uint32 ascii = 5;
     uint32 type = 6;
-    uint32 screen_x = 7;
-    uint32 screen_y = 8;
-    float map_x = 9;
-    float map_y = 10;
+    float map_x = 7;
+    float map_y = 8;
 }
 
 // 工程装配指令 (1Hz)
-// operation: 1=确认装配, 2=取消装配
+// operation: 0=开始兑换, 1=确认装配, 2=取消装配
 message AssemblyCommand {
     uint32 operation = 1;
     uint32 difficulty = 2;
@@ -85,13 +83,13 @@ message DartCommand {
 
 // 哨兵控制指令请求 (1Hz)
 // command_id: 1=补血点补弹, 2=补给站实体补弹, 3=远程补弹, 4=远程回血,
-//   5=确认复活, 6=花费金币复活, 7=地图标点, 8=进攻姿态, 9=防御姿态, 10=移动姿态
+//   5=确认复活, 6=花费金币复活, 7=进攻姿态, 8=防御姿态, 9=移动姿态
 message SentryCtrlCommand {
     uint32 command_id = 1;
 }
 
 // 空中支援指令 (1Hz)
-// command_id: 1=免费呼叫, 2=花费金币呼叫, 3=中断
+// command_id: 0=取消空中支援, 1=免费呼叫, 2=花费金币呼叫
 message AirSupportCommand {
     uint32 command_id = 1;
 }
@@ -149,11 +147,11 @@ message GlobalSpecialMechanism {
 }
 
 // 全局事件通知 (触发式)
-// event_id: 1=击杀, 2=建筑摧毁, 3=能量机关次数变化, 4=能量机关可激活,
-//   5=灯臂激活数量, 6=能量机关被激活, 7=英雄进入部署模式, 8=己方英雄狙击伤害,
-//   9=对方英雄狙击伤害, 10=己方呼叫空中支援, 11=己方空中支援被打断,
-//   12=对方呼叫空中支援, 13=对方空中支援被打断, 14=飞镖命中,
-//   15=飞镖闸门开启, 16=己方基地遭攻击, 17=前哨站停转, 18=基地护甲展开
+// event_id: 1=击杀, 2=前哨站摧毁, 3=大能量机关激活结果, 4=能量机关进入已激活,
+//   5=己方英雄狙击伤害, 6=对方英雄狙击伤害, 7=对方呼叫空中支援,
+//   8=对方空中支援被反制, 9=飞镖命中, 10=对方飞镖闸门开启,
+//   11=基地遭攻击, 12=对方前哨站停转, 13=对方基地护甲展开,
+//   14=对方请求四级装配强制退出缓冲, 15=装配结果
 message Event {
     int32 event_id = 1;
     string param = 2;
@@ -243,6 +241,7 @@ message RobotPosition {
     float y = 2;
     float z = 3;
     float yaw = 4;
+    uint32 robot_id = 5;
 }
 
 // Buff效果信息 (获得增益触发, 此后1Hz)
@@ -274,14 +273,18 @@ message RobotPathPlanInfo {
     uint32 sender_id = 6;
 }
 
-// 雷达发送的机器人位置信息 (1Hz)
+// 单个机器人雷达位置信息
 // is_high_light: 0=否, 1=是, 2=是但定位模块离线
+message RadarSingleRobotInfo {
+    uint32 target_pos_x = 1;
+    uint32 target_pos_y = 2;
+    uint32 is_high_light = 3;
+}
+
+// 雷达发送的所有机器人位置信息 (触发式)
+// 顺序: 对方1/2/3/4/6/7, 己方1/2/3/4/6/7
 message RadarInfoToClient {
-    uint32 target_robot_id = 1;
-    float target_pos_x = 2;
-    float target_pos_y = 3;
-    float torward_angle = 4;
-    uint32 is_high_light = 5;
+    repeated RadarSingleRobotInfo robot_info = 1;
 }
 
 // 机器人自定义上传数据流 (50Hz, 对应串口 0x0310)
@@ -290,15 +293,18 @@ message CustomByteBlock {
 }
 
 // 科技核心运动状态同步 (1Hz)
-// status: 1=未进入装配, 2=已选择难度核心移动中, 3=核心移动完成可首次装配,
-//   4=上一步骤完成可下一步, 5=步骤全部完成, 6=已确认装配核心移动中
+// basic_state: 1=初始位置, 2=运动中, 3=已到达对应位姿
+// putin_state/move_state/rotate_state: 0=未完成, 1=已完成
 // enemy_core_status: 0=对方没有正在装配, 1=对方装配非四级, 2=对方装配四级
 message TechCoreMotionStateSync {
     uint32 maximum_difficulty_level = 1;
-    uint32 status = 2;
-    uint32 enemy_core_status = 3;
-    uint32 remain_time_all = 4;
-    uint32 remain_time_step = 5;
+    uint32 basic_state = 2;
+    uint32 putin_state = 3;
+    uint32 move_state = 4;
+    uint32 rotate_state = 5;
+    uint32 enemy_core_status = 6;
+    uint32 remain_time_all = 7;
+    uint32 remain_time_step = 8;
 }
 
 // 步兵/英雄性能体系状态同步 (1Hz)
@@ -319,7 +325,7 @@ message DeployModeStatusSync {
 message RuneStatusSync {
     uint32 rune_status = 1;
     uint32 activated_arms = 2;
-    uint32 average_rings = 3;
+    float average_rings = 3;
 }
 
 // 哨兵姿态和弱化状态 (1Hz)

@@ -1,0 +1,15 @@
+<div class="clock-widget">
+    <h3>🕐 当前时间</h3>
+    <div class="time">{{ current_time }}</div>
+    <div class="timezone">{{ timezone }}</div>
+    <script>
+        // 可以包含JavaScript实现实时更新
+        setInterval(() => {
+            fetch('/api/component/clock/data')
+                .then(r => r.json())
+                .then(data => {
+                    document.querySelector('.time').textContent = data.current_time;
+                });
+        }, 1000);
+    </script>
+</div>
