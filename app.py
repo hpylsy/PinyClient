@@ -1,3 +1,4 @@
+import argparse
 import cv2
 import json
 import time
@@ -20,6 +21,77 @@ logger = RMColorLogger("MainApp")
 app = Flask(__name__)
 service: Optional[CoreService] = None
 _component_manager = ComponentManager()
+
+
+SIDE_CHOICES = {
+    "red": consts.Sides.RED,
+    "blue": consts.Sides.BLUE,
+}
+
+ROBOT_CHOICES = {
+    "hero": consts.RobotTypes.HERO,
+    "engineer": consts.RobotTypes.ENGINEER,
+    "infantry": consts.RobotTypes.INFANTRY,
+    "air": consts.RobotTypes.AIR,
+    "sentry": consts.RobotTypes.SENTRY,
+    "dart": consts.RobotTypes.DART,
+    "radar": consts.RobotTypes.RADAR,
+}
+
+
+def build_test_config(video_source: str) -> consts.TestConfig:
+    if video_source == "auto":
+        return consts.TestConfig()
+    if video_source == "mqtt":
+        return consts.TestConfig(if_test=True, if_mqtt_source=True)
+    if video_source == "udp":
+        return consts.TestConfig(if_test=True, if_udp_source=True)
+    return consts.TestConfig(if_test=True)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="PinyClient 上位机 Web 客户端。默认使用真实上下位机连接。"
+    )
+    parser.add_argument("--side", choices=SIDE_CHOICES.keys(), default="red")
+    parser.add_argument("--robot", choices=ROBOT_CHOICES.keys(), default="hero")
+    parser.add_argument(
+        "--infantry-select",
+        type=int,
+        default=0,
+        help="仅 robot=infantry 时使用，取值 1/2/3。",
+    )
+    parser.add_argument(
+        "--mqtt-host",
+        default="192.168.12.1",
+        help="选手端 MQTT broker 地址。",
+    )
+    parser.add_argument("--mqtt-port", type=int, default=3333)
+    parser.add_argument(
+        "--udp-bind-host",
+        default="0.0.0.0",
+        help="本机 UDP 图传监听地址；正常部署建议 0.0.0.0。",
+    )
+    parser.add_argument("--udp-port", type=int, default=3334)
+    parser.add_argument(
+        "--video-source",
+        choices=("auto", "udp", "mqtt", "none"),
+        default="auto",
+        help=(
+            "图传源策略。auto 为正式模式：英雄按状态自动切换，非英雄固定 UDP；"
+            "udp/mqtt/none 为显式测试覆盖。"
+        ),
+    )
+    parser.add_argument(
+        "--console",
+        action="store_true",
+        help="启动交互命令行而不是普通日志模式。",
+    )
+    parser.add_argument("--debug", action="store_true", help="启用 Flask debug。")
+    args = parser.parse_args()
+    if args.robot == "infantry" and args.infantry_select not in (1, 2, 3):
+        parser.error("--robot infantry 时 --infantry-select 必须是 1/2/3")
+    return args
 
 
 def build_component_manager() -> ComponentManager:
@@ -118,17 +190,18 @@ if __name__ == '__main__':
     # 官方协议下 MQTT 服务端固定为 192.168.12.1:3333，
     # 而 UDP 图传接收必须绑定本机地址（建议 0.0.0.0 监听所有网卡）。
     # 两者语义不同，禁止复用为同一个 host 参数。
+    args = parse_args()
     _component_manager = build_component_manager()
 
     service = CoreService(
-        side=consts.Sides.RED,
-        robot=consts.RobotTypes.INFANTRY,
-        infantry_select=2,
-        mqtt_host="127.0.0.1",
-        port_mqtt=3333,
-        udp_bind_host="0.0.0.0",
-        port_udp=3334,
-        # test_config=consts.TestConfig(if_test=True, if_mqtt_source=True)
+        side=SIDE_CHOICES[args.side],
+        robot=ROBOT_CHOICES[args.robot],
+        infantry_select=args.infantry_select,
+        mqtt_host=args.mqtt_host,
+        port_mqtt=args.mqtt_port,
+        udp_bind_host=args.udp_bind_host,
+        port_udp=args.udp_port,
+        test_config=build_test_config(args.video_source),
     )
     # grid_config = config.GridConfig(
     #     right_up=(4, 2),
@@ -145,6 +218,6 @@ if __name__ == '__main__':
         service, 
         app,
         logger, 
-        start_log=True, 
-        start_debug=False,
+        start_log=not args.console,
+        start_debug=args.debug,
     )

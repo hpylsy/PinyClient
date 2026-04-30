@@ -139,12 +139,14 @@ class MqttImgSource:
 
         self.latest_frame: Optional[np.ndarray] = None
         self.frame_lock = threading.Lock()
+        self.pipeline_lock = threading.RLock()
         self.cv_debug = False
         self.stats = MqttDecodeStats(last_stats_ts=time.time())
 
         self.pipeline = Gst.parse_launch(
             "appsrc name=source is-live=true format=time do-timestamp=false "
             "caps=\"application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000\" ! "
+            "rtpjitterbuffer latency=50 drop-on-latency=true ! "
             "rtph264depay ! "
             "h264parse ! "
             "avdec_h264 ! "
@@ -278,7 +280,8 @@ class MqttImgSource:
         buf = Gst.Buffer.new_allocate(None, len(rtp_data), None)
         buf.fill(0, rtp_data)
 
-        ret = self.appsrc.emit("push-buffer", buf)
+        with self.pipeline_lock:
+            ret = self.appsrc.emit("push-buffer", buf)
         if ret != Gst.FlowReturn.OK:
             logger.debug(f"RTP推送失败: {ret}")
             return False
@@ -335,22 +338,36 @@ class MqttImgSource:
         self.stats.last_stats_ts = now
 
     def _poll_bus(self):
-        while True:
-            msg = self.bus.pop_filtered(
-                Gst.MessageType.ERROR | Gst.MessageType.WARNING | Gst.MessageType.EOS
-            )
-            if msg is None:
-                break
+        with self.pipeline_lock:
+            while True:
+                msg = self.bus.pop_filtered(
+                    Gst.MessageType.ERROR | Gst.MessageType.WARNING | Gst.MessageType.EOS
+                )
+                if msg is None:
+                    break
 
-            if msg.type == Gst.MessageType.ERROR:
-                err, dbg = msg.parse_error()
-                logger.error(f"MQTT解码器错误: {err}, debug={dbg}")
-            elif msg.type == Gst.MessageType.WARNING:
-                warn, dbg = msg.parse_warning()
-                logger.warning(f"MQTT解码器警告: {warn}, debug={dbg}")
-            elif msg.type == Gst.MessageType.EOS:
-                logger.warning("MQTT解码器收到EOS")
-                self.running = False
+                if msg.type == Gst.MessageType.ERROR:
+                    err, dbg = msg.parse_error()
+                    logger.error(f"MQTT解码器错误: {err}, debug={dbg}")
+                elif msg.type == Gst.MessageType.WARNING:
+                    warn, dbg = msg.parse_warning()
+                    logger.warning(f"MQTT解码器警告: {warn}, debug={dbg}")
+                elif msg.type == Gst.MessageType.EOS:
+                    logger.warning("MQTT解码器收到EOS")
+                    self.running = False
+
+    def reset_decoder(self):
+        """重置 H264 RTP 解码器，清掉旧参考帧和队列。"""
+        self._drain_packet_queue()
+        with self.frame_lock:
+            self.latest_frame = None
+        with self.pipeline_lock:
+            self.pipeline.set_state(Gst.State.NULL)
+            self.pipeline.get_state(Gst.SECOND)
+            self.pipeline.set_state(Gst.State.PLAYING)
+            self.pipeline.get_state(Gst.SECOND)
+        self._drain_packet_queue()
+        logger.info("MQTT H264解码器已重置")
 
     def _decode_loop(self):
         while self.running:
@@ -376,7 +393,8 @@ class MqttImgSource:
         self._drain_packet_queue()
         self._register_raw_callback()
 
-        self.pipeline.set_state(Gst.State.PLAYING)
+        with self.pipeline_lock:
+            self.pipeline.set_state(Gst.State.PLAYING)
         self.running = True
 
         self.decode_thread = threading.Thread(target=self._decode_loop, daemon=True)
@@ -394,8 +412,9 @@ class MqttImgSource:
             self.decode_thread.join(timeout=5.0)
         logger.info("MQTT UDP服务器解码线程已停止")
 
-        self.appsrc.emit("end-of-stream")
-        self.pipeline.set_state(Gst.State.NULL)
+        with self.pipeline_lock:
+            self.appsrc.emit("end-of-stream")
+            self.pipeline.set_state(Gst.State.NULL)
         self._unregister_raw_callback()
         logger.info("MQTT 管道解码器已结束进程")
 
