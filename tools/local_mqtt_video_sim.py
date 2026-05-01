@@ -49,6 +49,9 @@ from models.protocol import messages_pb2 as pb  # noqa: E402
 
 CUSTOM_BLOCK_TOPIC = "CustomByteBlock"
 CUSTOM_BLOCK_SIZE = 300
+CUSTOM_BLOCK_SERIALIZED_INNER_SIZE = 297
+CUSTOM_BLOCK_SERIALIZED_PREFIX = b"\x0a\xa9\x02"
+CUSTOM_BLOCK_SUPPORTED_FIXED_SIZES = (CUSTOM_BLOCK_SIZE, CUSTOM_BLOCK_SERIALIZED_INNER_SIZE)
 
 SNIPER_SUB_HEADERS = (0xA6, 0xA7, 0xA8, 0xA9, 0xAA)
 SNIPER_SUB_DATA_SIZE = 60
@@ -72,6 +75,8 @@ class BridgeStats:
     crc_bad: int = 0
     serial_bad_groups: int = 0
     reassembled_300: int = 0
+    serialized_inner_297: int = 0
+    nested_serialized_inner_297: int = 0
     mqtt_published: int = 0
     mqtt_publish_failed: int = 0
     rtp_packets: int = 0
@@ -117,15 +122,52 @@ def verify_crc16(packet: bytes) -> bool:
     return packet[-2] == (expected & 0xFF) and packet[-1] == ((expected >> 8) & 0xFF)
 
 
-def build_sniper_sub_packets(payload_300: bytes) -> list[bytes]:
-    if len(payload_300) != SNIPER_TOTAL_DATA:
-        raise ValueError(f"sniper payload must be 300 bytes, got {len(payload_300)}")
+def build_serialized_custom_block_packet(rtp_payload: bytes) -> bytes:
+    max_payload = CUSTOM_BLOCK_SERIALIZED_INNER_SIZE - 2
+    if len(rtp_payload) > max_payload:
+        raise ValueError(f"serialized sender RTP payload must be <= {max_payload} bytes")
+
+    inner = bytearray(CUSTOM_BLOCK_SERIALIZED_INNER_SIZE)
+    struct.pack_into("<H", inner, 0, len(rtp_payload))
+    inner[2:2 + len(rtp_payload)] = rtp_payload
+    return CUSTOM_BLOCK_SERIALIZED_PREFIX + bytes(inner)
+
+
+def extract_serialized_custom_block(payload: bytes) -> Optional[bytes]:
+    if len(payload) != CUSTOM_BLOCK_SIZE or not payload.startswith(CUSTOM_BLOCK_SERIALIZED_PREFIX):
+        return None
+    try:
+        msg = pb.CustomByteBlock()
+        msg.ParseFromString(payload)
+    except Exception:
+        return None
+    if len(msg.data) in CUSTOM_BLOCK_SUPPORTED_FIXED_SIZES:
+        return msg.data
+    return None
+
+
+def extract_fixed_packet_payload(payload: bytes) -> Optional[bytes]:
+    nested = extract_serialized_custom_block(payload)
+    if nested is not None:
+        payload = nested
+
+    if len(payload) not in CUSTOM_BLOCK_SUPPORTED_FIXED_SIZES:
+        return None
+    actual_len = payload[0] | (payload[1] << 8)
+    if actual_len <= 0 or actual_len > len(payload) - 2:
+        return None
+    return payload[2:2 + actual_len]
+
+
+def build_sniper_sub_packets(payload: bytes) -> list[bytes]:
+    if len(payload) != SNIPER_TOTAL_DATA:
+        raise ValueError(f"sniper payload must be 300 bytes, got {len(payload)}")
 
     packets: list[bytes] = []
     for idx, header in enumerate(SNIPER_SUB_HEADERS):
         start = idx * SNIPER_SUB_DATA_SIZE
         end = start + SNIPER_SUB_DATA_SIZE
-        body = bytes((header,)) + payload_300[start:end]
+        body = bytes((header,)) + payload[start:end]
         packets.append(append_crc16(body))
     return packets
 
@@ -463,7 +505,10 @@ class PtyMqttBridge:
 
             payload_300 = bytes(self._reassembly_payload)
             self._reset_serial_reassembly()
+
             self.stats.reassembled_300 += 1
+            if extract_serialized_custom_block(payload_300) is not None:
+                self.stats.serialized_inner_297 += 1
             self._record_rtp_packet(payload_300)
             if self.publisher.publish_custom_block(payload_300):
                 self.stats.mqtt_published += 1
@@ -473,16 +518,22 @@ class PtyMqttBridge:
         return buffer
 
     def _record_rtp_packet(self, payload_300: bytes) -> None:
-        if len(payload_300) != CUSTOM_BLOCK_SIZE:
+        payload = extract_serialized_custom_block(payload_300)
+        if payload is not None:
+            self.stats.nested_serialized_inner_297 += 1
+        else:
+            payload = payload_300
+
+        if len(payload) not in CUSTOM_BLOCK_SUPPORTED_FIXED_SIZES:
             self.stats.rtp_bad_packets += 1
             return
 
-        actual_len = payload_300[0] | (payload_300[1] << 8)
-        if actual_len <= 0 or actual_len > CUSTOM_BLOCK_SIZE - 2:
+        actual_len = payload[0] | (payload[1] << 8)
+        if actual_len <= 0 or actual_len > len(payload) - 2:
             self.stats.rtp_bad_packets += 1
             return
 
-        rtp = payload_300[2:2 + actual_len]
+        rtp = payload[2:2 + actual_len]
         if len(rtp) < 12:
             self.stats.rtp_bad_packets += 1
             return
@@ -544,6 +595,7 @@ class PtyMqttBridge:
             f"crc_bad={self.stats.crc_bad} "
             f"serial_bad_groups={self.stats.serial_bad_groups} "
             f"reassembled_300={self.stats.reassembled_300} "
+            f"serialized_inner_297={self.stats.serialized_inner_297} "
             f"mqtt_published={self.stats.mqtt_published} "
             f"mqtt_publish_failed={self.stats.mqtt_publish_failed} "
             f"rtp_packets={self.stats.rtp_packets} "
@@ -730,6 +782,8 @@ def start_sender(
         str(args.output_size),
         "--enable-display",
         "true" if args.sender_display else "false",
+        "--enable-custom-block-serialization",
+        "true" if args.sender_serialize_custom_block else "false",
     ])
     name = "gst_e2e_sender"
     if args.source_mode == "file":
@@ -801,7 +855,11 @@ def maybe_log_web_decode_stats(web_service, last_log: float, interval: float) ->
         f"bad={stats.bad_packets} "
         f"push={stats.pushed_packets} "
         f"frame={stats.decoded_frames} "
-        f"queue={queue_size}"
+        f"queue={queue_size} "
+        f"outer_pb_300={getattr(stats, 'mqtt_outer_pb_300', 0)} "
+        f"raw_300={getattr(stats, 'mqtt_raw_300', 0)} "
+        f"sender_direct_297={getattr(stats, 'sender_serialized_direct_297', 0)} "
+        f"sender_nested_297={getattr(stats, 'sender_serialized_nested_297', 0)}"
     )
     return time.monotonic()
 
@@ -875,6 +933,23 @@ def run_dry_run() -> int:
         print("dry_run failed: protobuf CustomByteBlock mismatch", file=sys.stderr)
         return 1
 
+    serialized_source = build_serialized_custom_block_packet(bytes(range(12, 12 + 32)))
+    serialized_sub_packets = build_sniper_sub_packets(serialized_source)
+    serialized_reassembler = SniperSerialReassembler()
+    serialized_result: Optional[bytes] = None
+    for sub_packet in serialized_sub_packets:
+        serialized_result = serialized_reassembler.feed(sub_packet)
+    if serialized_result != serialized_source:
+        print("dry_run failed: serialized packet reassembly mismatch", file=sys.stderr)
+        return 1
+    serialized_inner = extract_serialized_custom_block(serialized_result)
+    if serialized_inner is None or len(serialized_inner) != CUSTOM_BLOCK_SERIALIZED_INNER_SIZE:
+        print("dry_run failed: serialized CustomByteBlock extraction mismatch", file=sys.stderr)
+        return 1
+    if extract_fixed_packet_payload(serialized_result) != bytes(range(12, 12 + 32)):
+        print("dry_run failed: serialized fixed packet decode mismatch", file=sys.stderr)
+        return 1
+
     class _DryRunPublisher:
         def __init__(self) -> None:
             self.payloads: list[bytes] = []
@@ -905,12 +980,20 @@ def run_dry_run() -> int:
         print("dry_run failed: noisy serial stream was not reassembled", file=sys.stderr)
         return 1
 
+    publisher.payloads.clear()
+    leftover = bridge._consume_buffer(b"".join(serialized_sub_packets))
+    if leftover or publisher.payloads != [serialized_source]:
+        print("dry_run failed: serialized serial stream was not reassembled", file=sys.stderr)
+        return 1
+
     print(
         "dry_run ok: "
         f"serial_sub_packets={len(sub_packets)} "
         f"serial_wire_bytes={sum(len(p) for p in sub_packets)} "
         f"headers={[hex(p[0]) for p in sub_packets]} "
-        f"mqtt_payload_bytes={len(mqtt_payload)}"
+        f"mqtt_payload_bytes={len(mqtt_payload)} "
+        f"serialized_sender_payload_bytes={len(serialized_source)} "
+        f"serialized_inner_bytes={len(serialized_inner)}"
     )
     return 0
 
@@ -1002,6 +1085,14 @@ def parse_args() -> argparse.Namespace:
         "--sender-display",
         action="store_true",
         help="Show gst_e2e_sender OpenCV debug windows: raw, green detection, ROI and pre-send image.",
+    )
+    parser.add_argument(
+        "--sender-serialize-custom-block",
+        action="store_true",
+        help=(
+            "Ask gst_e2e_sender to pre-serialize the 300B payload as a CustomByteBlock. "
+            "Serial remains 5x63B; MQTT bridge still publishes the outer CustomByteBlock."
+        ),
     )
     parser.add_argument("--quiet-ros", action="store_true", help="Hide camera and serial-driver output.")
     parser.add_argument("--fps", type=int, default=30)

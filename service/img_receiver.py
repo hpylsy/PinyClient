@@ -28,8 +28,22 @@ UDP_HEADER_SIZE = 8
 
 CUSTOM_BLOCK_TOPIC = "CustomByteBlock"
 CUSTOM_BLOCK_SIZE = 300
+CUSTOM_BLOCK_SERIALIZED_INNER_SIZE = 297
+CUSTOM_BLOCK_FIXED_WIRE_SIZES = (CUSTOM_BLOCK_SIZE,)
+CUSTOM_BLOCK_SERIALIZED_INNER_SIZES = (CUSTOM_BLOCK_SERIALIZED_INNER_SIZE,)
+CUSTOM_BLOCK_SUPPORTED_FIXED_SIZES = (
+    *CUSTOM_BLOCK_FIXED_WIRE_SIZES,
+    *CUSTOM_BLOCK_SERIALIZED_INNER_SIZES,
+)
 CUSTOM_BLOCK_HEADER_SIZE = 2
-CUSTOM_BLOCK_MAX_PAYLOAD = CUSTOM_BLOCK_SIZE - CUSTOM_BLOCK_HEADER_SIZE
+CUSTOM_BLOCK_RESERVED_BEGIN = 33
+CUSTOM_BLOCK_RESERVED_END = 54
+CUSTOM_BLOCK_RESERVED_SIZE = CUSTOM_BLOCK_RESERVED_END - CUSTOM_BLOCK_RESERVED_BEGIN
+CUSTOM_BLOCK_FIRST_PAYLOAD_BYTES = CUSTOM_BLOCK_RESERVED_BEGIN - CUSTOM_BLOCK_HEADER_SIZE
+CUSTOM_BLOCK_MAX_PAYLOAD = (
+    CUSTOM_BLOCK_SIZE - CUSTOM_BLOCK_HEADER_SIZE - CUSTOM_BLOCK_RESERVED_SIZE
+)
+CUSTOM_BLOCK_SERIALIZED_PREFIX = b"\x0a\xa9\x02"
 
 RTP_QUEUE_MAXSIZE = 256
 MQTT_STATS_LOG_INTERVAL_SEC = 1.0
@@ -43,6 +57,11 @@ class MqttDecodeStats:
     bad_packets: int = 0
     pushed_packets: int = 0
     decoded_frames: int = 0
+    last_decoded_ts: float = 0.0
+    mqtt_outer_pb_fixed: int = 0
+    mqtt_raw_fixed: int = 0
+    sender_serialized_direct: int = 0
+    sender_serialized_nested: int = 0
     last_stats_ts: float = 0.0
 
 
@@ -138,6 +157,7 @@ class MqttImgSource:
         self.packet_queue: Queue[bytes] = Queue(maxsize=RTP_QUEUE_MAXSIZE)
 
         self.latest_frame: Optional[np.ndarray] = None
+        self.latest_frame_updated_at: float = 0.0
         self.frame_lock = threading.Lock()
         self.pipeline_lock = threading.RLock()
         self.cv_debug = False
@@ -186,18 +206,40 @@ class MqttImgSource:
             self.stats.bad_packets += 1
             return None
 
-        # 固定包协议：300字节，前2字节小端长度，后面是RTP负载+填充
-        if len(payload) != CUSTOM_BLOCK_SIZE:
+        # 固定包协议：前2字节小端长度，后面是RTP负载+填充。
+        # 正常模式为300B；sender预序列化模式为297B内层固定包。
+        if len(payload) not in CUSTOM_BLOCK_SUPPORTED_FIXED_SIZES:
             self.stats.bad_packets += 1
             return None
 
         actual_len = payload[0] | (payload[1] << 8)
-        if actual_len == 0 or actual_len > CUSTOM_BLOCK_MAX_PAYLOAD:
+        max_payload = self._custom_block_max_payload(len(payload))
+        if max_payload is None:
+            self.stats.bad_packets += 1
+            return None
+        if actual_len == 0 or actual_len > max_payload:
             self.stats.bad_packets += 1
             return None
 
-        start = CUSTOM_BLOCK_HEADER_SIZE
-        return payload[start:start + actual_len]
+        if len(payload) not in CUSTOM_BLOCK_FIXED_WIRE_SIZES:
+            start = CUSTOM_BLOCK_HEADER_SIZE
+            return payload[start:start + actual_len]
+
+        first_len = min(actual_len, CUSTOM_BLOCK_FIRST_PAYLOAD_BYTES)
+        first = payload[CUSTOM_BLOCK_HEADER_SIZE:CUSTOM_BLOCK_HEADER_SIZE + first_len]
+        remaining = actual_len - first_len
+        if remaining <= 0:
+            return first
+        second = payload[CUSTOM_BLOCK_RESERVED_END:CUSTOM_BLOCK_RESERVED_END + remaining]
+        return first + second
+
+    @staticmethod
+    def _custom_block_max_payload(packet_size: int) -> Optional[int]:
+        if packet_size in CUSTOM_BLOCK_FIXED_WIRE_SIZES:
+            return packet_size - CUSTOM_BLOCK_HEADER_SIZE - CUSTOM_BLOCK_RESERVED_SIZE
+        if packet_size in CUSTOM_BLOCK_SERIALIZED_INNER_SIZES:
+            return packet_size - CUSTOM_BLOCK_HEADER_SIZE
+        return None
 
     def _register_raw_callback(self):
         if not self._raw_callback_registered:
@@ -219,9 +261,10 @@ class MqttImgSource:
     def _on_raw_custom_byte_block(self, payload: bytes):
         """处理 MQTT CustomByteBlock 载荷。
         
-        官方系统发送 Protobuf 序列化的 CustomByteBlock（~303B），
-        其中 data 字段承载 300B 固定包。
-        也兼容直接发送原始 300B 的旧 mock_gateway 格式。
+        官方系统发送 Protobuf 序列化的 CustomByteBlock，其中 data 字段承载
+        300B 固定包。固定包内 [33:54) 是污染规避区，接收端会跳过后拼接。
+        sender预序列化开关打开时，原始固定包本身也是一个 CustomByteBlock，
+        内部承载更小的固定包。
         """
         raw_300b = self._extract_custom_byte_block_data(payload)
         if raw_300b is None:
@@ -248,12 +291,11 @@ class MqttImgSource:
                 pass
         self._log_stats()
 
-    @staticmethod
-    def _extract_custom_byte_block_data(payload: bytes) -> Optional[bytes]:
-        """从 MQTT payload 中提取 300B 原始数据。
+    def _extract_custom_byte_block_data(self, payload: bytes) -> Optional[bytes]:
+        """从 MQTT payload 中提取固定包数据。
         
         优先尝试 Protobuf 反序列化（官方格式），
-        若失败且长度为 300 则视为原始格式（兼容模式）。
+        若失败且长度为固定包大小则视为原始格式（兼容模式）。
         """
         if payload is None:
             return None
@@ -262,15 +304,43 @@ class MqttImgSource:
         try:
             pb_msg = _pb.CustomByteBlock()
             pb_msg.ParseFromString(payload)
-            if len(pb_msg.data) == CUSTOM_BLOCK_SIZE:
+            nested = MqttImgSource._extract_nested_custom_byte_block_data(pb_msg.data)
+            if nested is not None:
+                self.stats.sender_serialized_nested += 1
+                return nested
+            if len(pb_msg.data) in CUSTOM_BLOCK_SERIALIZED_INNER_SIZES:
+                self.stats.sender_serialized_direct += 1
+                return pb_msg.data
+            if len(pb_msg.data) in CUSTOM_BLOCK_FIXED_WIRE_SIZES:
+                self.stats.mqtt_outer_pb_fixed += 1
                 return pb_msg.data
         except Exception:
             pass
 
-        # 兼容模式：原始 300B 字节
-        if len(payload) == CUSTOM_BLOCK_SIZE:
+        # 兼容模式：原始固定包字节
+        if len(payload) in CUSTOM_BLOCK_FIXED_WIRE_SIZES:
+            nested = MqttImgSource._extract_nested_custom_byte_block_data(payload)
+            if nested is not None:
+                self.stats.sender_serialized_direct += 1
+                return nested
+            self.stats.mqtt_raw_fixed += 1
             return payload
 
+        return None
+
+    @staticmethod
+    def _extract_nested_custom_byte_block_data(payload: bytes) -> Optional[bytes]:
+        if len(payload) not in CUSTOM_BLOCK_FIXED_WIRE_SIZES:
+            return None
+        if not payload.startswith(CUSTOM_BLOCK_SERIALIZED_PREFIX):
+            return None
+        try:
+            nested_msg = _pb.CustomByteBlock()
+            nested_msg.ParseFromString(payload)
+            if len(nested_msg.data) in CUSTOM_BLOCK_SUPPORTED_FIXED_SIZES:
+                return nested_msg.data
+        except Exception:
+            return None
         return None
 
     def _push_rtp_data(self, rtp_data: bytes) -> bool:
@@ -286,6 +356,30 @@ class MqttImgSource:
             logger.debug(f"RTP推送失败: {ret}")
             return False
         return True
+
+    @staticmethod
+    def _wall_clock_ms(ts: Optional[float] = None) -> str:
+        if ts is None:
+            ts = time.time()
+        millis = int((ts - int(ts)) * 1000)
+        return f"{time.strftime('%H:%M:%S', time.localtime(ts))}.{millis:03d}"
+
+    @staticmethod
+    def _draw_receiver_overlay(frame: np.ndarray, decoded_idx: int, ts: float):
+        text = f"RX {MqttImgSource._wall_clock_ms(ts)} D{decoded_idx}"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = 0.42 if frame.shape[1] >= 300 else 0.35
+        thickness = 1
+        (text_w, text_h), baseline = cv2.getTextSize(text, font, scale, thickness)
+        x = 6
+        y = max(text_h + 8, frame.shape[0] - 8)
+        x1 = max(0, x - 3)
+        y1 = max(0, y - text_h - 5)
+        x2 = min(frame.shape[1], x + text_w + 5)
+        y2 = min(frame.shape[0], y + baseline + 5)
+        if x2 > x1 and y2 > y1:
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 0), -1)
+        cv2.putText(frame, text, (x, y), font, scale, (0, 255, 255), thickness, cv2.LINE_AA)
 
     def _on_new_sample(self, sink):
         try:
@@ -311,9 +405,15 @@ class MqttImgSource:
             frame = np.frombuffer(map_info.data, dtype=np.uint8).reshape((height, width, 3)).copy()
             buf.unmap(map_info)
 
+            decoded_idx = self.stats.decoded_frames + 1
+            decoded_ts = time.time()
+            self._draw_receiver_overlay(frame, decoded_idx, decoded_ts)
+
             with self.frame_lock:
                 self.latest_frame = frame
-            self.stats.decoded_frames += 1
+                self.latest_frame_updated_at = decoded_ts
+            self.stats.decoded_frames = decoded_idx
+            self.stats.last_decoded_ts = decoded_ts
 
             if self.cv_debug:
                 cv2.imshow("MQTT Stream", frame)
@@ -327,13 +427,28 @@ class MqttImgSource:
         now = time.time()
         if now - self.stats.last_stats_ts < MQTT_STATS_LOG_INTERVAL_SEC:
             return
+        with self.frame_lock:
+            latest_frame_updated_at = self.latest_frame_updated_at
+        latest_age_ms = (
+            (now - latest_frame_updated_at) * 1000.0
+            if latest_frame_updated_at > 0
+            else -1.0
+        )
         logger.debug(
-            "MQTT解码统计: rx=%d bad=%d push=%d frame=%d queue=%d",
+            (
+                "MQTT解码统计: rx=%d bad=%d push=%d frame=%d queue=%d latest_age_ms=%.1f "
+                "outer_pb_fixed=%d raw_fixed=%d sender_direct=%d sender_nested=%d"
+            ),
             self.stats.rx_packets,
             self.stats.bad_packets,
             self.stats.pushed_packets,
             self.stats.decoded_frames,
             self.packet_queue.qsize(),
+            latest_age_ms,
+            self.stats.mqtt_outer_pb_fixed,
+            self.stats.mqtt_raw_fixed,
+            self.stats.sender_serialized_direct,
+            self.stats.sender_serialized_nested,
         )
         self.stats.last_stats_ts = now
 
@@ -361,6 +476,7 @@ class MqttImgSource:
         self._drain_packet_queue()
         with self.frame_lock:
             self.latest_frame = None
+            self.latest_frame_updated_at = 0.0
         with self.pipeline_lock:
             self.pipeline.set_state(Gst.State.NULL)
             self.pipeline.get_state(Gst.SECOND)
